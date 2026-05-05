@@ -1,0 +1,72 @@
+# Parâmetros de tuning e thresholds do sistema.
+# Ajuste sem tocar no código — útil para experimentação.
+
+# ==================== EXTRAÇÃO DE PADRÕES (extract_patterns.py) ====================
+
+extraction:
+  # Tamanho máximo de msg para considerar "curta" (candidata a SHORT_NOISE)
+  short_noise_max_len: 15
+
+  # Frequência mínima para considerar msg curta como noise
+  short_noise_min_frequency: 3
+
+  # Tamanho mínimo de msg para considerar como candidata a spam
+  spam_min_len: 30
+
+  # Threshold de similaridade para classificar como noise (vs msg válida)
+  noise_similarity_threshold: 0.5
+
+  # Threshold de similaridade para validar spam
+  spam_similarity_threshold: 0.4
+
+  # Threshold de similaridade para classificar feedback positivo/negativo
+  feedback_similarity_threshold: 0.55
+
+  # Máximo de padrões extraídos por categoria
+  max_short_noise: 50
+  max_spam_indicators: 30
+  max_feedback_per_type: 30
+
+  # Máximo de candidatos únicos a feedback para classificar
+  max_feedback_candidates: 200
+
+# ==================== DETECÇÃO SEMÂNTICA (cleaner.py) ====================
+
+semantic:
+  # Threshold para is_semantic_noise() — quanto mais alto, mais restritivo
+  noise_threshold: 0.75
+
+  # Threshold para is_semantic_feedback() — quanto mais alto, mais restritivo
+  feedback_threshold: 0.7
+
+# ==================== RETRIEVAL ====================
+
+retrieval:
+  # Top-K padrão para retrieval
+  default_top_k: 3
+
+  # Top-K para perguntas complexas
+  complex_top_k: 5
+
+# ==================== INTENT CLASSIFICATION ====================
+
+classification:
+  # Intenções que precisam de retrieval
+  needs_retrieval:
+    - venda
+    - suporte
+    - cobranca
+    - renovacao
+
+  # Intenções que NÃO precisam de retrieval
+  no_retrieval:
+    - feedback_positivo
+    - feedback_negativo
+    - humano
+    - fora_da_base
+
+  # Intenções mapeadas para prompt de vendas
+  vendas_intents:
+    - venda
+    - renovacao
+    - cobranca

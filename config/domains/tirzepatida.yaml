@@ -1,0 +1,203 @@
+# Configuração do domínio: Tirzepatida / Tirzec
+# Vendas e suporte de Tirzepatida (Tirzec) para emagrecimento.
+
+name: "Tirzepatida/Tirzec"
+description: "vendas e suporte de Tirzepatida (Tirzec) para emagrecimento"
+
+products:
+  - Tirzec
+  - TG
+  - Monjaro
+  - Tirzepatida
+  - ampola
+  - 15mg
+  - 2ml
+
+keywords:
+  sale:
+    - quanto custa
+    - preço
+    - valor
+    - comprar
+    - pagar
+    - parcela
+    - pix
+    - promoção
+    - desconto
+    - envio
+    - entrega
+    - frete
+    - estoque
+    - disponível
+    - vender
+    - quero
+    - interessado
+    - interesse
+    - reais
+    - "r$"
+    - tirzec
+    - tg
+    - ampola
+    - tratamento
+
+  support:
+    - como usar
+    - aplicar
+    - dose
+    - efeito
+    - colateral
+    - conservar
+    - geladeira
+    - temperatura
+    - dor
+    - enjoo
+    - não funcionou
+    - problema
+    - ajuda
+    - dúvida
+    - orientação
+    - resultado
+    - perdi
+    - emagreci
+    - peso
+    - receita
+
+noise_terms:
+  - encaminhe essa mensagem
+  - compartilhe com
+  - promoção imperdível
+  - clique aqui
+  - arraste pra cima
+  - link na bio
+  - sorteio
+  - participe do grupo
+  - corrente
+  - bom dia grupo
+  - boa noite grupo
+
+feedback:
+  positive:
+    - deu certo
+    - resolveu
+    - funcionou
+    - obrigado
+    - valeu
+    - top
+    - perfeito
+    - emagreci
+    - perdi peso
+    - resultado
+
+  negative:
+    - não resolveu
+    - continua
+    - ainda está
+    - não funcionou
+    - piorou
+    - não perdi
+    - nada mudou
+    - engordei
+
+# Referências para classificação por embeddings
+references:
+  noise:
+    - ok
+    - sim
+    - não
+    - beleza
+    - certo
+    - entendi
+    - "👍"
+    - obrigado
+    - valeu
+    - blz
+    - haha
+    - kkk
+
+  valid_short:
+    - quanto custa
+    - como usar
+    - qual a dose
+    - tem disponível
+    - preciso de ajuda
+    - não funcionou
+    - como conservar
+    - qual o resultado
+
+  spam:
+    - encaminhe essa mensagem para 10 pessoas
+    - clique no link para ganhar prêmio
+    - promoção imperdível de celular grátis
+    - você foi sorteado
+    - compartilhe com seus amigos
+
+  feedback_positive:
+    - resolveu meu problema
+    - deu certo
+    - funcionou
+    - obrigado ajudou
+    - perfeito
+    - emagreci bastante
+    - perdi peso
+    - muito bom resultado
+    - excelente
+    - recomendo
+    - maravilha
+
+  feedback_negative:
+    - não resolveu
+    - continua igual
+    - piorou
+    - não funcionou
+    - não emagreci
+    - ainda não perdi
+    - não adiantou
+    - voltou o peso
+    - péssimo
+    - horrível
+    - engordei
+
+  neutral:
+    - quanto custa
+    - como funciona
+    - quero comprar
+    - tem disponível
+    - qual o prazo
+    - bom dia
+
+short_noise:
+  - ok
+  - sim
+  - não
+  - nao
+  - boa
+  - vlw
+  - blz
+  - top
+  - beleza
+  - certo
+  - entendi
+  - hmm
+  - hm
+  - ah
+  - uhum
+  - "👍"
+  - "👌"
+  - "🙏"
+  - kkk
+  - kkkk
+  - kkkkk
+  - rs
+  - rsrs
+  - haha
+  - hahaha
+  - oi
+  - olá
+  - ola
+  - bom dia
+  - boa tarde
+  - boa noite
+  - obg
+  - obrigado
+  - obrigada
+  - valeu

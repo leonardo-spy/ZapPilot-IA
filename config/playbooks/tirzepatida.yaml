@@ -1,0 +1,326 @@
+# ============================================================================
+# PLAYBOOK — Tirzepatida / Tirzec
+# ============================================================================
+# Roteiros de conversa para venda e suporte de Tirzepatida.
+# Segue o mesmo schema do android_box — adapte conforme necessidade.
+# ============================================================================
+
+instructions: |
+  Vendo Tirzepatida (Tirzec/TG) para emagrecimento.
+  O produto precisa de cuidados específicos (conservação em geladeira).
+  
+  Regras do meu atendimento:
+  - Nunca dar orientação médica — sempre sugerir consultar médico
+  - Explicar conservação e aplicação de forma simples
+  - Se perguntar dose, orientar que siga prescrição médica
+  - Oferecer acompanhamento pós-compra (perguntar resultados)
+  - Ser sensível — muitos clientes têm insegurança com peso
+
+messages:
+  boas_vindas_novo:
+    type: text
+    content: |
+      Olá! 😊 Tudo bem?
+      Você se interessou pelo tratamento com Tirzepatida?
+      Posso te explicar como funciona e os valores!
+
+  boas_vindas_retorno:
+    type: text
+    content: |
+      Oi, {cliente_nome}! Que bom te ver de novo 😊
+      Quer renovar ou tem alguma dúvida sobre o tratamento?
+
+  info_completa:
+    type: text
+    content: |
+      A Tirzepatida (Tirzec) é um tratamento injetável para emagrecimento.
+      
+      ✅ Como funciona: aplicação semanal (subcutânea)
+      📉 Resultados: redução de apetite + perda de peso progressiva
+      🧊 Conservação: geladeira (2-8°C)
+      
+      ⚠️ Importante: ideal ter acompanhamento médico.
+      Quer saber os valores e doses disponíveis?
+
+  info_resumida:
+    type: text
+    content: |
+      Como você já conhece, vou direto:
+      Tenho disponível pronta-entrega.
+      Quer ver valores e doses?
+
+  tabela_precos:
+    type: text
+    content: |
+      💉 Valores atualizados:
+      
+      ▸ Tirzec 5mg (iniciante): R$ XXX
+      ▸ Tirzec 10mg: R$ YYY
+      ▸ Tirzec 15mg (manutenção): R$ ZZZ
+      
+      🧊 Enviamos com gelo seco — chega conservado.
+      Qual dose você usa?
+
+  como_aplicar:
+    type: text
+    content: |
+      📌 Aplicação é simples:
+      1. Tire da geladeira 30min antes
+      2. Limpe a região (barriga ou coxa) com álcool
+      3. Aplique subcutâneo (agulha pequena, quase não dói)
+      4. Alterne os lados a cada semana
+      
+      Se quiser, mando um vídeo explicativo! 🎥
+
+  como_conservar:
+    type: text
+    content: |
+      🧊 Conservação:
+      - Manter na geladeira (2-8°C)
+      - NÃO congelar
+      - Proteger da luz
+      - Válido por 30 dias após aberto
+      
+      Na entrega, vai com gelo seco e isopor.
+
+  fechamento:
+    type: text
+    content: |
+      Ótimo! Pra finalizar:
+      📍 Qual seu CEP? (pra calcular frete)
+      💳 Pix ou cartão?
+      
+      Envio no mesmo dia se fechar até 14h! 🚀
+
+  fechamento_pix:
+    type: text
+    content: |
+      Perfeito! Segue o Pix:
+      📱 [CHAVE_PIX]
+      
+      Assim que cair, separo a sua e te mando o rastreio.
+
+  reativacao:
+    type: text
+    content: |
+      Oi, {cliente_nome}! Tudo bem? 😊
+      Lembra que você perguntou sobre o tratamento?
+      Ainda tenho disponível. Se quiser, posso te passar uma condição especial!
+
+  dica_avancada:
+    type: text
+    content: "Conseguiu ver? Te pergunto porque essa ampola menor está saindo bastante 👀"
+    tags: [tip, urgency, scarcity]
+
+  follow_up_resultado:
+    type: text
+    content: |
+      Oi! 😊 Já faz uma semana que você começou.
+      Como está se sentindo? Notou alguma diferença?
+      Qualquer efeito colateral, me avisa!
+
+  # --- Sequência pós-compra ---
+  pos_compra_1:
+    type: text
+    content: "Pronto! Sua encomenda foi enviada 🚀 Segue o rastreio:"
+
+  pos_compra_2:
+    type: text
+    content: |
+      📦 Quando receber:
+      - Coloque imediatamente na geladeira
+      - Não balance o frasco
+      - Aplicação: 1x por semana, mesmo dia
+
+  pos_compra_3:
+    type: text
+    content: "Qualquer dúvida sobre aplicação, me chama! Vou te acompanhar 💪"
+
+  pos_compra_tutorial_img:
+    type: image
+    content: "assets/tutorial_aplicacao.jpg"
+    caption: "Regiões de aplicação recomendadas"
+
+  pos_compra_conservacao_img:
+    type: image
+    content: "assets/conservacao_geladeira.jpg"
+    caption: "Posição correta na geladeira"
+
+
+flows:
+  venda_cliente_novo:
+    description: "Primeira interação — explicar produto completo"
+    trigger:
+      intent: venda
+      condition: client_is_new
+    priority: 10
+    steps:
+      - action: send
+        message: boas_vindas_novo
+
+      - action: wait_response
+
+      - action: condition
+        if: "response_indicates_knows_product"
+        then:
+          - action: send
+            message: info_resumida
+        else:
+          - action: send
+            message: info_completa
+
+      - action: wait_response
+
+      - action: condition
+        if: "asks_price"
+        then:
+          - action: send
+            message: tabela_precos
+        else:
+          - action: generate_response
+            context: "responder dúvida sobre tirzepatida usando RAG"
+
+  venda_cliente_retorno:
+    description: "Cliente que já conversou — ser direto"
+    trigger:
+      intent: venda
+      condition: client_has_history
+    priority: 20
+    steps:
+      - action: send
+        message: boas_vindas_retorno
+
+      - action: wait_response
+
+      - action: condition
+        if: "wants_refill"
+        then:
+          - action: send
+            message: tabela_precos
+          - action: wait_response
+          - action: goto_flow
+            flow: fechamento_venda
+        else:
+          - action: generate_response
+            context: "atender dúvida do cliente retorno"
+
+  fechamento_venda:
+    description: "Cliente quer comprar — fechar pedido"
+    trigger:
+      intent: venda
+      condition: client_wants_to_buy
+    priority: 50
+    steps:
+      - action: send
+        message: fechamento
+
+      - action: wait_response
+
+      - action: condition
+        if: "chose_pix"
+        then:
+          - action: send
+            message: fechamento_pix
+        else:
+          - action: generate_response
+            context: "combinar pagamento/entrega"
+
+  pos_compra:
+    description: "Após confirmação de pagamento — enviar sequência de orientações"
+    trigger:
+      condition: payment_confirmed
+    priority: 60
+    steps:
+      - action: send_sequence
+        messages:
+          - pos_compra_1
+          - pos_compra_2
+          - pos_compra_3
+          - pos_compra_tutorial_img
+          - pos_compra_conservacao_img
+        delay_between: "3s"
+
+  follow_up_resultado:
+    description: "Acompanhamento pós-uso — perguntar resultados"
+    trigger:
+      condition: days_since_purchase >= 7
+    priority: 5
+    steps:
+      - action: send
+        message: follow_up_resultado
+
+      - action: wait_response
+
+      - action: condition
+        if: "positive_result"
+        then:
+          - action: send
+            type: text
+            content: "Que ótimo! 🎉 Esse é só o começo, os resultados acumulam."
+        else:
+          - action: generate_response
+            context: "orientar sobre expectativas e efeitos colaterais"
+
+  reativacao:
+    description: "Follow-up após inatividade"
+    trigger:
+      condition: client_inactive_days >= 5
+    priority: 5
+    steps:
+      - action: send
+        message: reativacao
+
+      - action: wait_response
+        timeout: "48h"
+
+      - action: condition
+        if: "shows_interest"
+        then:
+          - action: goto_flow
+            flow: venda_cliente_retorno
+        else:
+          - action: end
+            reason: "Cliente não respondeu"
+
+  dica_avancada:
+    description: "Gatilho de escassez/curiosidade"
+    trigger:
+      condition: manual
+    priority: 1
+    steps:
+      - action: send
+        message: dica_avancada
+
+      - action: wait_response
+
+      - action: condition
+        if: "shows_interest"
+        then:
+          - action: goto_flow
+            flow: venda_cliente_retorno
+
+  suporte_aplicacao:
+    description: "Dúvida sobre como aplicar/conservar"
+    trigger:
+      intent: suporte
+      condition: topic_is_application
+    priority: 35
+    steps:
+      - action: condition
+        if: "asks_how_to_apply"
+        then:
+          - action: send
+            message: como_aplicar
+        else:
+          - action: send
+            message: como_conservar
+
+      - action: wait_response
+
+      - action: condition
+        if: "still_has_doubt"
+        then:
+          - action: generate_response
+            context: "suporte detalhado sobre aplicação/conservação"
+        else:
+          - action: end

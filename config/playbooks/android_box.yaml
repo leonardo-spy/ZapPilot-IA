@@ -1,0 +1,373 @@
+# ============================================================================
+# PLAYBOOK — Android Box / IPTV
+# ============================================================================
+# Roteiros de conversa modulares. Cada flow é um cenário independente.
+# O bot seleciona o flow adequado com base no contexto (intent, cliente, estado).
+#
+# CONCEITOS:
+#   - messages: templates reutilizáveis (texto, imagem, áudio)
+#   - flows: sequências de passos com condições e ações
+#   - triggers: condições que ativam um flow
+#   - steps: ações sequenciais dentro de um flow
+#
+# COMO FUNCIONA:
+#   1. O agente classifica a intenção (já existe: intent classification)
+#   2. Com base no contexto (intent + memória do cliente), seleciona o flow
+#   3. Executa os steps do flow em ordem, respeitando condições
+#   4. Cada step pode: enviar mensagem, aguardar resposta, verificar condição,
+#      ramificar para outro flow, ou finalizar
+# ============================================================================
+
+# ==================== INSTRUÇÕES GERAIS DO DOMÍNIO ====================
+# Isso é injetado no system prompt como contexto adicional.
+# Equivalente ao INSTRUCTION.md de outros bots.
+
+instructions: |
+  Eu vendo Android Box para IPTV. Trabalho com aparelhos novos e recondicionados.
+  Meu diferencial é o suporte pós-venda: configuro tudo pro cliente.
+  
+  Regras gerais do meu atendimento:
+  - Se o cliente é de grupo, ser mais direto (ele já viu a oferta)
+  - Se veio no privado sem contexto, perguntar como nos achou
+  - Sempre oferecer configuração inclusa
+  - Se perguntar preço sem especificar modelo, mostrar as opções
+  - Nunca pressionar, mas manter follow-up educado
+
+# ==================== MENSAGENS REUTILIZÁVEIS ====================
+# Templates nomeados. Usados nos flows via referência (ex: send: boas_vindas_novo)
+# Suportam variáveis: {cliente_nome}, {produto}, {preco}, etc.
+
+messages:
+  # --- Boas-vindas ---
+  boas_vindas_novo:
+    type: text
+    content: |
+      Olá! 👋 Tudo bem?
+      Vi que você se interessou pelo nosso aparelho.
+      Posso te explicar como funciona?
+
+  boas_vindas_retorno:
+    type: text
+    content: |
+      E aí, {cliente_nome}! Tudo certo?
+      Vi que você já tinha conversado com a gente antes.
+      Posso te ajudar com algo?
+
+  boas_vindas_grupo:
+    type: text
+    content: |
+      Fala! 👊 Vi sua mensagem no grupo.
+      Quer que eu te passe os detalhes no privado?
+
+  # --- Informações do produto ---
+  info_completa:
+    type: text
+    content: |
+      O aparelho é um Android Box que transforma sua TV em Smart TV completa.
+      📺 Canais ao vivo (esportes, filmes, séries)
+      🎬 Filmes e séries on-demand
+      ⚡ Fácil de instalar — eu configuro tudo pra você
+
+      Funciona em qualquer TV com HDMI.
+      Quer saber os valores?
+
+  info_resumida:
+    type: text
+    content: |
+      Beleza, como você já conhece, vou direto ao ponto:
+      Tenho disponível com tudo configurado, pronto pra usar.
+      Quer ver os planos/valores?
+
+  # --- Preços/Ofertas ---
+  tabela_precos:
+    type: text
+    content: |
+      📋 Valores atualizados:
+      
+      ▸ Aparelho + configuração: R$ XXX
+      ▸ Recondicionado + config: R$ YYY
+      ▸ Só o plano (já tem aparelho): R$ ZZZ/mês
+      
+      Todos incluem suporte por WhatsApp! 🛠️
+      Qual te interessa mais?
+
+  # --- Fechamento ---
+  fechamento:
+    type: text
+    content: |
+      Perfeito! Pra finalizar:
+      📍 Entrega ou retirada?
+      💳 Pix, cartão ou dinheiro?
+      
+      Me confirma que eu já preparo tudo pra você! ✅
+
+  fechamento_pix:
+    type: text
+    content: |
+      Show! Segue a chave Pix:
+      📱 [CHAVE_PIX]
+      
+      Assim que cair, te envio o comprovante e combinamos a entrega/configuração.
+
+  # --- Reativação (follow-up) ---
+  reativacao:
+    type: text
+    content: |
+      Opa, {cliente_nome}! Tudo bem? 😊
+      Lembra que você perguntou sobre o aparelho?
+      Ainda tenho disponível, caso tenha interesse. Só me avisar! 🙋
+
+  reativacao_promo:
+    type: text
+    content: |
+      Ei, {cliente_nome}! Surgiu uma condição especial essa semana.
+      Se ainda tiver interesse, posso te passar os detalhes. Quer ver?
+
+  # --- Dicas avançadas ---
+  dica_avancada:
+    type: text
+    content: "Conseguiu ver? Te pergunto porque essa ampola menor está saindo bastante 👀"
+    tags: [tip, urgency]
+
+  # --- Pós-venda / Sequências ---
+  pos_venda_1:
+    type: text
+    content: |
+      Configuração pronta! 🎉
+      Vou te mandar um guia rápido de como usar:
+
+  pos_venda_2:
+    type: text
+    content: |
+      📺 Pra acessar os canais: abra o app XCIPTV
+      🔑 Sua senha tá salva, é só abrir
+      📱 Se travar: reinicia o app ou o aparelho
+
+  pos_venda_3:
+    type: text
+    content: |
+      Qualquer dúvida, pode me chamar aqui!
+      Depois de uns dias te mando mensagem pra ver se tá tudo funcionando. 👍
+
+  pos_venda_tutorial_img:
+    type: image
+    content: "assets/tutorial_xciptv.jpg"
+    caption: "Tela do XCIPTV — é esse app que você vai usar"
+
+  pos_venda_controle_img:
+    type: image
+    content: "assets/controle_box.jpg"
+    caption: "Controle — os botões principais são esses"
+
+
+# ==================== FLOWS (cenários modulares) ====================
+# Cada flow é independente. O agente escolhe qual ativar baseado no trigger.
+# Steps são executados em sequência. Condições podem ramificar.
+
+flows:
+
+  # ---- FLOW: Cliente novo (nunca comprou) ----
+  venda_cliente_novo:
+    description: "Cliente que nunca interagiu antes — apresentar produto"
+    trigger:
+      intent: venda
+      condition: client_is_new  # sem histórico na memória
+    priority: 10
+    steps:
+      - action: send
+        message: boas_vindas_novo
+
+      - action: wait_response
+
+      - action: condition
+        if: "response_indicates_knows_product"
+        then:
+          - action: send
+            message: info_resumida
+        else:
+          - action: send
+            message: info_completa
+
+      - action: wait_response
+
+      - action: condition
+        if: "asks_price"
+        then:
+          - action: send
+            message: tabela_precos
+        else:
+          - action: generate_response
+            context: "responder dúvida usando RAG"
+
+      - action: wait_response
+
+      - action: condition
+        if: "wants_to_buy"
+        then:
+          - action: goto_flow
+            flow: fechamento_venda
+        else:
+          - action: send
+            message: reativacao
+            delay: "24h"  # agendar follow-up
+
+  # ---- FLOW: Cliente retorno (já conversou antes) ----
+  venda_cliente_retorno:
+    description: "Cliente que já interagiu — ser mais direto"
+    trigger:
+      intent: venda
+      condition: client_has_history
+    priority: 20
+    steps:
+      - action: send
+        message: boas_vindas_retorno
+
+      - action: wait_response
+
+      - action: send
+        message: info_resumida
+
+      - action: wait_response
+
+      - action: condition
+        if: "wants_to_buy"
+        then:
+          - action: goto_flow
+            flow: fechamento_venda
+
+  # ---- FLOW: Cliente do grupo ----
+  venda_grupo:
+    description: "Cliente que veio de grupo — já viu oferta, quer detalhes"
+    trigger:
+      intent: venda
+      condition: source_is_group
+    priority: 15
+    steps:
+      - action: send
+        message: boas_vindas_grupo
+
+      - action: wait_response
+
+      - action: condition
+        if: "wants_private_details"
+        then:
+          - action: send
+            message: tabela_precos
+        else:
+          - action: generate_response
+            context: "responder pergunta do grupo"
+
+  # ---- FLOW: Fechamento de venda ----
+  fechamento_venda:
+    description: "Cliente decidiu comprar — fechar"
+    trigger:
+      intent: venda
+      condition: client_wants_to_buy
+    priority: 50
+    steps:
+      - action: send
+        message: fechamento
+
+      - action: wait_response
+
+      - action: condition
+        if: "chose_pix"
+        then:
+          - action: send
+            message: fechamento_pix
+        else:
+          - action: generate_response
+            context: "combinar forma de pagamento/entrega"
+
+  # ---- FLOW: Pós-informação (sequência de msgs) ----
+  pos_informacao:
+    description: "Após enviar info, se aceitar, enviar sequência explicativa"
+    trigger:
+      intent: venda
+      condition: client_accepted_info
+    priority: 30
+    steps:
+      - action: send_sequence
+        messages:
+          - pos_venda_1
+          - pos_venda_2
+          - pos_venda_3
+          - pos_venda_tutorial_img
+          - pos_venda_controle_img
+        delay_between: "2s"  # delay entre cada msg da sequência
+
+  # ---- FLOW: Reativação (follow-up após inatividade) ----
+  reativacao:
+    description: "Cliente sumiu — tentar reengajar"
+    trigger:
+      condition: client_inactive_days >= 3
+    priority: 5
+    steps:
+      - action: condition
+        if: "had_promo_recently"
+        then:
+          - action: send
+            message: reativacao_promo
+        else:
+          - action: send
+            message: reativacao
+
+      - action: wait_response
+        timeout: "48h"  # se não responder em 48h, encerrar
+
+      - action: condition
+        if: "shows_interest"
+        then:
+          - action: goto_flow
+            flow: venda_cliente_retorno
+        else:
+          - action: end
+            reason: "Cliente não respondeu ao follow-up"
+
+  # ---- FLOW: Dica avançada (trigger manual ou pós-conversa) ----
+  dica_avancada:
+    description: "Enviar dica que gera curiosidade/urgência"
+    trigger:
+      condition: manual  # ativado manualmente ou via regra custom
+    priority: 1
+    steps:
+      - action: send
+        message: dica_avancada
+
+      - action: wait_response
+
+      - action: condition
+        if: "shows_interest"
+        then:
+          - action: goto_flow
+            flow: venda_cliente_retorno
+
+  # ---- FLOW: Suporte pós-venda ----
+  suporte_pos_venda:
+    description: "Cliente já comprou e precisa de ajuda"
+    trigger:
+      intent: suporte
+      condition: client_is_buyer
+    priority: 40
+    steps:
+      - action: generate_response
+        context: "usar RAG para suporte técnico"
+
+      - action: wait_response
+
+      - action: condition
+        if: "problem_resolved"
+        then:
+          - action: send
+            type: text
+            content: "Show! Qualquer coisa, estou aqui 👊"
+          - action: end
+        else:
+          - action: condition
+            if: "attempts >= 2"
+            then:
+              - action: escalate
+                reason: "Problema não resolvido após 2 tentativas"
+            else:
+              - action: generate_response
+                context: "segunda tentativa de suporte"

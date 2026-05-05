@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+pyyaml
+chromadb
+sentence-transformers
+scikit-learn
+numpy
+rank-bm25
+openai
+groq
+langgraph
+langchain-core
+hdbscan
+google-genai

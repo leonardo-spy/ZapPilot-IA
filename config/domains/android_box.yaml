@@ -1,0 +1,210 @@
+# Configuração do domínio: Android Box / IPTV
+# Este arquivo define o comportamento do bot para vendas e suporte de Android Box.
+# Para criar um novo domínio, copie este arquivo e ajuste os valores.
+
+name: "Android Box/IPTV"
+description: "vendas e suporte técnico de Android Box/IPTV"
+
+products:
+  - Android Box
+  - IPTV
+  - XCIPTV
+  - TV Express
+  - MFC
+  - Premiere
+  - SporTV
+
+keywords:
+  sale:
+    - quanto custa
+    - preço
+    - valor
+    - comprar
+    - pagar
+    - parcela
+    - pix
+    - promoção
+    - desconto
+    - envio
+    - entrega
+    - frete
+    - estoque
+    - disponível
+    - vender
+    - quero
+    - interessado
+    - interesse
+    - reais
+    - "r$"
+    - box
+    - aparelho
+    - dispositivo
+
+  support:
+    - canal caiu
+    - tela preta
+    - travando
+    - não abre
+    - não funciona
+    - reiniciar
+    - cache
+    - internet
+    - wifi
+    - controle
+    - atualizar
+    - firmware
+    - app
+    - aplicativo
+    - xciptv
+    - tv express
+    - erro
+    - problema
+    - ajuda
+    - configurar
+
+noise_terms:
+  - encaminhe essa mensagem
+  - compartilhe com
+  - promoção imperdível
+  - clique aqui
+  - arraste pra cima
+  - link na bio
+  - sorteio
+  - participe do grupo
+  - corrente
+  - bom dia grupo
+  - boa noite grupo
+
+feedback:
+  positive:
+    - deu certo
+    - resolveu
+    - funcionou
+    - obrigado
+    - valeu
+    - top
+    - perfeito
+    - show
+    - voltou
+    - tá funcionando
+
+  negative:
+    - não resolveu
+    - continua
+    - ainda está
+    - não funcionou
+    - piorou
+    - mesmo problema
+    - nada mudou
+    - não voltou
+
+# Referências para classificação por embeddings (usadas em extract_patterns e cleaner)
+references:
+  # Msgs curtas que SÃO noise (sem valor informativo)
+  noise:
+    - ok
+    - sim
+    - não
+    - beleza
+    - certo
+    - entendi
+    - "👍"
+    - obrigado
+    - valeu
+    - blz
+    - haha
+    - kkk
+
+  # Msgs curtas que NÃO são noise (perguntas válidas curtas)
+  valid_short:
+    - quanto custa
+    - como funciona
+    - tem disponível
+    - qual o preço
+    - preciso de ajuda
+    - não funciona
+    - qual canal
+    - como configurar
+
+  # Referências de spam (para validação por embedding)
+  spam:
+    - encaminhe essa mensagem para 10 pessoas
+    - clique no link para ganhar prêmio
+    - promoção imperdível de celular grátis
+    - você foi sorteado
+    - compartilhe com seus amigos
+
+  # Referências de feedback positivo (para classificação por embedding)
+  feedback_positive:
+    - resolveu meu problema
+    - deu certo
+    - funcionou
+    - obrigado ajudou
+    - perfeito
+    - show de bola
+    - tá funcionando agora
+    - muito bom
+    - excelente atendimento
+    - voltou ao normal
+    - maravilha
+
+  # Referências de feedback negativo (para classificação por embedding)
+  feedback_negative:
+    - não resolveu
+    - continua com problema
+    - piorou
+    - não funcionou
+    - mesmo erro
+    - ainda não funciona
+    - não adiantou
+    - voltou o problema
+    - péssimo
+    - horrível
+    - não ajudou nada
+
+  # Referências neutras (NÃO são feedback — para desambiguação)
+  neutral:
+    - quanto custa
+    - como funciona
+    - quero comprar
+    - tem disponível
+    - qual o prazo
+    - bom dia
+
+# Mensagens curtas sem valor (SHORT_NOISE expandido para este domínio)
+short_noise:
+  - ok
+  - sim
+  - não
+  - nao
+  - boa
+  - vlw
+  - blz
+  - top
+  - beleza
+  - certo
+  - entendi
+  - hmm
+  - hm
+  - ah
+  - uhum
+  - "👍"
+  - "👌"
+  - "🙏"
+  - kkk
+  - kkkk
+  - kkkkk
+  - rs
+  - rsrs
+  - haha
+  - hahaha
+  - oi
+  - olá
+  - ola
+  - bom dia
+  - boa tarde
+  - boa noite
+  - obg
+  - obrigado
+  - obrigada
+  - valeu

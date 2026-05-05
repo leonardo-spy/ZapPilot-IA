@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZapPilot IA - Chat</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #fff;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            background: #1a1a2e;
+            padding: 16px 24px;
+            border-bottom: 1px solid #333;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .header h1 { font-size: 18px; font-weight: 600; }
+        .header .status { color: #4ade80; font-size: 12px; }
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .message {
+            max-width: 75%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            line-height: 1.5;
+            font-size: 14px;
+            word-wrap: break-word;
+        }
+        .message.user {
+            align-self: flex-end;
+            background: #16a34a;
+            border-bottom-right-radius: 4px;
+        }
+        .message.bot {
+            align-self: flex-start;
+            background: #1e293b;
+            border-bottom-left-radius: 4px;
+        }
+        .message .meta {
+            font-size: 11px;
+            opacity: 0.6;
+            margin-top: 6px;
+        }
+        .input-area {
+            background: #1a1a2e;
+            padding: 16px 24px;
+            border-top: 1px solid #333;
+            display: flex;
+            gap: 12px;
+        }
+        .input-area input {
+            flex: 1;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 12px 16px;
+            color: #fff;
+            font-size: 14px;
+            outline: none;
+        }
+        .input-area input:focus { border-color: #4ade80; }
+        .input-area button {
+            background: #16a34a;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 12px 24px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .input-area button:hover { background: #15803d; }
+        .input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .typing { opacity: 0.6; font-style: italic; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>ZapPilot IA</h1>
+        <span class="status">● Online</span>
+    </div>
+
+    <div class="chat-container" id="chat"></div>
+
+    <div class="input-area">
+        <input type="text" id="input" placeholder="Digite sua mensagem..." autocomplete="off" />
+        <button id="send" onclick="sendMessage()">Enviar</button>
+    </div>
+
+    <script>
+        const API_URL = window.location.origin;
+        const CUSTOMER_ID = 'web_' + Math.random().toString(36).substr(2, 9);
+        const chatEl = document.getElementById('chat');
+        const inputEl = document.getElementById('input');
+        const sendBtn = document.getElementById('send');
+
+        inputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        function addMessage(text, role, meta = '') {
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+            div.innerHTML = text.replace(/\n/g, '<br>');
+            if (meta) {
+                div.innerHTML += `<div class="meta">${meta}</div>`;
+            }
+            chatEl.appendChild(div);
+            chatEl.scrollTop = chatEl.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const message = inputEl.value.trim();
+            if (!message) return;
+
+            inputEl.value = '';
+            sendBtn.disabled = true;
+            addMessage(message, 'user');
+
+            // Typing indicator
+            const typing = document.createElement('div');
+            typing.className = 'message bot typing';
+            typing.textContent = 'Digitando...';
+            chatEl.appendChild(typing);
+            chatEl.scrollTop = chatEl.scrollHeight;
+
+            try {
+                const res = await fetch(`${API_URL}/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ customer_id: CUSTOMER_ID, message }),
+                });
+
+                const data = await res.json();
+                chatEl.removeChild(typing);
+
+                const meta = `${data.intent} | ${data.route} | conf: ${(data.confidence * 100).toFixed(0)}%`;
+                addMessage(data.response, 'bot', meta);
+            } catch (err) {
+                chatEl.removeChild(typing);
+                addMessage('Erro ao conectar com o servidor.', 'bot');
+            }
+
+            sendBtn.disabled = false;
+            inputEl.focus();
+        }
+
+        // Welcome message
+        addMessage('Olá! Sou o assistente virtual. Como posso ajudar?', 'bot');
+    </script>
+</body>
+</html>
