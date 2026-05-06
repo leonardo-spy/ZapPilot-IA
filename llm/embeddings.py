@@ -150,11 +150,25 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
     def _identify_exhausted_quota(self, error_msg: str) -> str:
         """Identifica qual quota estourou a partir da mensagem de erro."""
         error_str = str(error_msg)
-        # Procurar quotaMetric na resposta
-        metric_match = re.search(r'quotaMetric["\s:]+([^"]+)', error_str)
+
+        # Procurar quotaId (mais preciso que quotaMetric)
+        quota_id_match = re.search(r"quotaId['\"\s:]+([^'\"]+)", error_str)
+        if quota_id_match:
+            quota_id = quota_id_match.group(1)
+            limit_match = re.search(r"quotaValue['\"\s:]+['\"\s]*(\d+)", error_str)
+            limit = limit_match.group(1) if limit_match else "?"
+
+            if "PerMinute" in quota_id:
+                return f"RPM ({quota_id}) - limit: {limit}/min"
+            elif "PerDay" in quota_id:
+                return f"RPD ({quota_id}) - limit: {limit}/day"
+            return f"{quota_id} - limit: {limit}"
+
+        # Fallback: procurar quotaMetric
+        metric_match = re.search(r"quotaMetric['\"\s:]+([^'\"]+)", error_str)
         if metric_match:
             metric = metric_match.group(1)
-            limit_match = re.search(r'quotaValue["\s:]+["\s]*(\d+)', error_str)
+            limit_match = re.search(r"quotaValue['\"\s:]+['\"\s]*(\d+)", error_str)
             limit = limit_match.group(1) if limit_match else "?"
             if "requests" in metric.lower():
                 return f"RPM (Requests/min) - limit: {limit}/min"
@@ -163,12 +177,12 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
             return f"{metric} - limit: {limit}"
 
         # Fallback por keywords
+        if "day" in error_str.lower():
+            return "RPD (Requests/day)"
         if "requests" in error_str.lower() or "per_minute" in error_str.lower():
             return "RPM (Requests/min)"
-        elif "tokens" in error_str.lower():
+        if "tokens" in error_str.lower():
             return "TPM (Tokens/min)"
-        elif "day" in error_str.lower():
-            return "RPD (Requests/day)"
         return "desconhecida (verifique o log completo)"
 
     def _call_with_retry(self, contents: list, config) -> object:
@@ -203,6 +217,14 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
                     )
                     raise
 
+                # Quota diária: não adianta retry, propaga direto para fallback
+                if "RPD" in quota or "PerDay" in quota:
+                    logger.error(
+                        f"[rate-limit] 429 - Quota DIÁRIA esgotada: {quota}. "
+                        f"Retry inútil — propagando para fallback local."
+                    )
+                    raise
+
                 if attempt >= self._max_retries:
                     logger.error(
                         f"[rate-limit] 429 - Max retries ({self._max_retries}) atingido. "
@@ -215,7 +237,7 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
                     f"Aguardando {retry_delay:.1f}s antes de retry "
                     f"(tentativa {attempt + 1}/{self._max_retries})..."
                 )
-                time.sleep(retry_delay)
+                time.sleep(retry_delay + 1)
 
         raise last_error
 

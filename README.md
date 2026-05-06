@@ -164,6 +164,9 @@ BOT_DOMAIN=tizerdral                         # android_box | tirzepatida | tizer
 # Locale (override de strings user-facing)
 BOT_LOCALE=pt_br                             # pt_br | en_us (default: pt_br)
 
+# KB complementar via LLM no build_all.py
+GENERATE_DOMAIN_KB=true                      # true | false (default: true)
+
 # Dados
 DATA_DIR=./data
 WHATSAPP_JSON=./input/whatsapp_chats.json
@@ -251,8 +254,10 @@ python scripts/build_all.py
 Gera termos de noise, spam e feedback via LLM para o domínio configurado:
 
 ```bash
-python -m kb.generate_domain_config           # Gera config
-python -m kb.generate_domain_config approve   # Aprova para uso
+python -m kb.generate_domain_config             # Gera config
+python -m kb.generate_domain_config review      # Review interativo (item-a-item)
+python -m kb.generate_domain_config approve     # Aprova TUDO de uma vez
+python -m kb.generate_domain_config reset       # Reseta para revisar novamente
 ```
 
 ### 4. Extração de Padrões do WhatsApp (opcional)
@@ -260,8 +265,10 @@ python -m kb.generate_domain_config approve   # Aprova para uso
 Extrai padrões reais de noise/spam/feedback diretamente dos dados exportados:
 
 ```bash
-python -m kb.extract_patterns                 # Extrai padrões
-python -m kb.extract_patterns approve         # Aprova para uso
+python -m kb.extract_patterns                   # Extrai padrões
+python -m kb.extract_patterns review            # Review interativo (item-a-item)
+python -m kb.extract_patterns approve           # Aprova TUDO de uma vez
+python -m kb.extract_patterns reset             # Reseta para revisar novamente
 ```
 
 ### 5. Iniciar o Servidor

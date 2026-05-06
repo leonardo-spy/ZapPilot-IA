@@ -714,13 +714,126 @@ def get_all_feedback_terms() -> dict:
     return {"positive": sorted(positive), "negative": sorted(negative)}
 
 
+# ==================== INTERACTIVE REVIEW ====================
+
+def _review_list_items(items: list[str], category: str) -> list[str]:
+    """
+    Interactive review of a list of items.
+    Returns only accepted items.
+    """
+    if not items:
+        return []
+
+    print(f"\n{'─' * 50}")
+    print(f"  {category} ({len(items)} itens)")
+    print(f"{'─' * 50}")
+
+    accepted = []
+    i = 0
+    while i < len(items):
+        item = items[i]
+        print(f"\n  [{i+1}/{len(items)}] \"{item}\"")
+        resp = input("    (a)ceitar | (r)ejeitar | (e)ditar | (A)ceitar TODOS restantes | (R)ejeitar TODOS | (q)uit: ").strip()
+
+        if resp in ("a", ""):
+            accepted.append(item)
+            i += 1
+        elif resp == "r":
+            i += 1
+        elif resp.lower() == "e":
+            new_val = input(f"    Novo valor: ").strip()
+            if new_val:
+                accepted.append(new_val)
+            else:
+                accepted.append(item)
+            i += 1
+        elif resp == "A" or resp.lower() == "all":
+            accepted.extend(items[i:])
+            break
+        elif resp == "R":
+            break
+        elif resp.lower() == "q":
+            break
+        else:
+            print("    Opção inválida. Use: a/r/e/A/R/q")
+
+    print(f"  → {len(accepted)}/{len(items)} aceitos")
+    return accepted
+
+
+def interactive_review():
+    """
+    Interactive review of extracted patterns — item by item.
+    """
+    data_dir = os.getenv("DATA_DIR", "./data")
+    path = f"{data_dir}/extracted_patterns.json"
+
+    if not os.path.exists(path):
+        print("❌ Nenhum padrão extraído encontrado. Execute sem argumentos primeiro.")
+        return
+
+    with open(path, encoding="utf-8") as f:
+        patterns = json.load(f)
+
+    if patterns.get("approved"):
+        print("✓ Padrões já aprovados. Use 'reset' para revisar novamente.")
+        return
+
+    print(f"\n{'=' * 60}")
+    print(f"  REVIEW INTERATIVO — Padrões WhatsApp ({patterns.get('domain', '?')})")
+    print(f"  Chats: {patterns.get('total_chats_analyzed', '?')} | Msgs: {patterns.get('total_msgs_analyzed', '?')}")
+    print(f"{'=' * 60}")
+    print("  Para cada item: (a)ceitar, (r)ejeitar, (e)ditar")
+    print("  Atalhos: (A) aceitar todos restantes, (R) rejeitar todos restantes")
+
+    list_categories = [
+        ("short_noise", "Short Noise"),
+        ("spam_indicators", "Spam Indicators"),
+        ("feedback_positive", "Feedback Positivo"),
+        ("feedback_negative", "Feedback Negativo"),
+    ]
+
+    for key, label in list_categories:
+        items = patterns.get(key, [])
+        if items:
+            patterns[key] = _review_list_items(items, label)
+
+    # Summary
+    print(f"\n{'=' * 60}")
+    print("  RESUMO FINAL:")
+    print(f"{'=' * 60}")
+    print(f"  short_noise:       {len(patterns.get('short_noise', []))}")
+    print(f"  spam_indicators:   {len(patterns.get('spam_indicators', []))}")
+    print(f"  feedback_positive: {len(patterns.get('feedback_positive', []))}")
+    print(f"  feedback_negative: {len(patterns.get('feedback_negative', []))}")
+
+    resp = input("\n  Salvar e aprovar resultado da revisão? (s/n): ").strip().lower()
+    if resp in ("s", "sim", "y", "yes"):
+        patterns["approved"] = True
+        patterns["needs_human_review"] = False
+        patterns["review_method"] = "interactive"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(patterns, f, ensure_ascii=False, indent=2)
+        print("  ✓ Padrões revisados e APROVADOS.")
+    else:
+        patterns["needs_human_review"] = True
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(patterns, f, ensure_ascii=False, indent=2)
+        print("  ✗ Revisão salva mas NÃO aprovada. Execute 'review' novamente ou 'approve'.")
+
+
 # ==================== CLI ====================
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     import sys
 
-    if len(sys.argv) > 1 and sys.argv[1] == "approve":
+    command = sys.argv[1] if len(sys.argv) > 1 else None
+
+    if command == "review":
+        interactive_review()
+
+    elif command == "approve":
         data_dir = os.getenv("DATA_DIR", "./data")
         path = f"{data_dir}/extracted_patterns.json"
 
@@ -735,40 +848,41 @@ if __name__ == "__main__":
             print("✓ Padrões já aprovados.")
             sys.exit(0)
 
-        print(f"=== Padrões extraídos do WhatsApp ({patterns['domain']}) ===")
-        print(f"  Chats analisados: {patterns.get('total_chats_analyzed', '?')}")
-        print(f"  Msgs analisadas: {patterns.get('total_msgs_analyzed', '?')}")
-        print()
-
-        print(f"short_noise ({len(patterns.get('short_noise', []))}):")
-        for t in patterns.get("short_noise", [])[:15]:
-            print(f"  - {t}")
-        if len(patterns.get("short_noise", [])) > 15:
-            print(f"  ... +{len(patterns['short_noise'])-15} mais")
-
-        print(f"\nspam_indicators ({len(patterns.get('spam_indicators', []))}):")
-        for t in patterns.get("spam_indicators", [])[:10]:
-            print(f"  - {t}")
-
-        print(f"\nfeedback_positive ({len(patterns.get('feedback_positive', []))}):")
-        for t in patterns.get("feedback_positive", [])[:10]:
-            print(f"  - {t}")
-
-        print(f"\nfeedback_negative ({len(patterns.get('feedback_negative', []))}):")
-        for t in patterns.get("feedback_negative", [])[:10]:
-            print(f"  - {t}")
+        print(f"=== Aprovar TUDO de uma vez: Padrões WhatsApp ({patterns.get('domain', '?')}) ===\n")
+        print(f"  short_noise:       {len(patterns.get('short_noise', []))}")
+        print(f"  spam_indicators:   {len(patterns.get('spam_indicators', []))}")
+        print(f"  feedback_positive: {len(patterns.get('feedback_positive', []))}")
+        print(f"  feedback_negative: {len(patterns.get('feedback_negative', []))}")
 
         print("\n" + "=" * 60)
-        resp = input("Aprovar estes padrões extraídos? (s/n): ").strip().lower()
+        resp = input("Aprovar TUDO sem revisão? (s/n): ").strip().lower()
 
         if resp in ("s", "sim", "y", "yes"):
             patterns["approved"] = True
             patterns["needs_human_review"] = False
+            patterns["review_method"] = "bulk_approve"
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(patterns, f, ensure_ascii=False, indent=2)
-            print("✓ Padrões APROVADOS. Serão usados na detecção semântica.")
+            print("✓ Padrões APROVADOS (bulk). Serão usados na detecção.")
         else:
-            print("✗ Não aprovado. Edite manualmente ou re-execute.")
+            print("✗ Não aprovado. Use 'review' para revisão item-a-item.")
+
+    elif command == "reset":
+        data_dir = os.getenv("DATA_DIR", "./data")
+        path = f"{data_dir}/extracted_patterns.json"
+
+        if not os.path.exists(path):
+            print("❌ Nenhum padrão encontrado.")
+            sys.exit(1)
+
+        with open(path, encoding="utf-8") as f:
+            patterns = json.load(f)
+
+        patterns["approved"] = False
+        patterns["needs_human_review"] = True
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(patterns, f, ensure_ascii=False, indent=2)
+        print("✓ Status resetado. Execute 'review' para revisar novamente.")
 
     else:
         print("=== Extraindo padrões do WhatsApp ===\n")
@@ -779,6 +893,8 @@ if __name__ == "__main__":
             print(f"  spam_indicators: {len(result.get('spam_indicators', []))}")
             print(f"  feedback_positive: {len(result.get('feedback_positive', []))}")
             print(f"  feedback_negative: {len(result.get('feedback_negative', []))}")
-            print(f"\n⚠️  Execute 'python -m kb.extract_patterns approve' para revisar e aprovar.")
+            print(f"\n⚠️  Próximo passo:")
+            print(f"   python -m kb.extract_patterns review    → Revisão item-a-item")
+            print(f"   python -m kb.extract_patterns approve   → Aprovar tudo de uma vez")
         else:
             print("❌ Nenhum padrão extraído.")

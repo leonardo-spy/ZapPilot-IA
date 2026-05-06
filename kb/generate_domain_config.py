@@ -307,6 +307,193 @@ def _parse_json_object(text: str) -> dict:
     return {}
 
 
+# ==================== INTERACTIVE REVIEW ====================
+
+def _review_list_items(items: list[str], category: str) -> list[str]:
+    """
+    Interactive review of a list of items.
+    Returns only accepted items.
+    """
+    if not items:
+        return []
+
+    print(f"\n{'─' * 50}")
+    print(f"  {category} ({len(items)} itens)")
+    print(f"{'─' * 50}")
+
+    accepted = []
+    i = 0
+    while i < len(items):
+        item = items[i]
+        print(f"\n  [{i+1}/{len(items)}] \"{item}\"")
+        resp = input("    (a)ceitar | (r)ejeitar | (e)ditar | (A)ceitar TODOS restantes | (R)ejeitar TODOS | (q)uit: ").strip()
+
+        if resp in ("a", ""):
+            accepted.append(item)
+            i += 1
+        elif resp == "r":
+            i += 1  # skip
+        elif resp.lower() == "e":
+            new_val = input(f"    Novo valor: ").strip()
+            if new_val:
+                accepted.append(new_val)
+            else:
+                accepted.append(item)
+            i += 1
+        elif resp == "A" or resp.lower() == "all":
+            # Accept all remaining
+            accepted.extend(items[i:])
+            break
+        elif resp == "R":
+            # Reject all remaining
+            break
+        elif resp.lower() == "q":
+            break
+        else:
+            print("    Opção inválida. Use: a/r/e/A/R/q")
+
+    print(f"  → {len(accepted)}/{len(items)} aceitos")
+    return accepted
+
+
+def _review_kb_entries(entries: list[dict]) -> list[dict]:
+    """Interactive review of KB entries."""
+    if not entries:
+        return []
+
+    print(f"\n{'─' * 50}")
+    print(f"  kb_entries ({len(entries)} entradas)")
+    print(f"{'─' * 50}")
+
+    accepted = []
+    i = 0
+    while i < len(entries):
+        entry = entries[i]
+        print(f"\n  [{i+1}/{len(entries)}] [{entry.get('category','?')}] {entry.get('title','?')}")
+        print(f"    symptoms: {entry.get('symptoms', [])[:3]}")
+        print(f"    response: {entry.get('recommended_response', '')[:80]}...")
+        print(f"    examples: {entry.get('examples', [])[:2]}")
+        resp = input("    (a)ceitar | (r)ejeitar | (A)ceitar TODOS restantes | (R)ejeitar TODOS | (q)uit: ").strip()
+
+        if resp in ("a", ""):
+            accepted.append(entry)
+            i += 1
+        elif resp == "r":
+            i += 1
+        elif resp == "A" or resp.lower() == "all":
+            accepted.extend(entries[i:])
+            break
+        elif resp == "R":
+            break
+        elif resp.lower() == "q":
+            break
+        else:
+            print("    Opção inválida.")
+
+    print(f"  → {len(accepted)}/{len(entries)} aceitos")
+    return accepted
+
+
+def _review_feedback_responses(responses: dict) -> dict:
+    """Interactive review of feedback response templates."""
+    if not responses:
+        return {}
+
+    print(f"\n{'─' * 50}")
+    print(f"  feedback_responses ({len(responses)} respostas)")
+    print(f"{'─' * 50}")
+
+    accepted = {}
+    for key, val in responses.items():
+        print(f"\n  [{key}]: \"{val}\"")
+        resp = input("    (a)ceitar | (r)ejeitar | (e)ditar: ").strip()
+        if resp in ("a", ""):
+            accepted[key] = val
+        elif resp.lower() == "e":
+            new_val = input(f"    Novo texto: ").strip()
+            accepted[key] = new_val if new_val else val
+        # else: reject (skip)
+
+    print(f"  → {len(accepted)}/{len(responses)} aceitos")
+    return accepted
+
+
+def interactive_review():
+    """
+    Interactive review of generated config — item by item.
+    Allows accepting, rejecting, or editing each item individually.
+    """
+    data_dir = os.getenv("DATA_DIR", "./data")
+    config_path = f"{data_dir}/{GENERATED_CONFIG_FILE}"
+
+    if not os.path.exists(config_path):
+        print("❌ Nenhuma configuração gerada encontrada. Execute sem argumentos primeiro.")
+        return
+
+    with open(config_path, encoding="utf-8") as f:
+        config = json.load(f)
+
+    if config.get("approved"):
+        print("✓ Configuração já aprovada. Use 'reset' para revisar novamente.")
+        return
+
+    print(f"\n{'=' * 60}")
+    print(f"  REVIEW INTERATIVO — {config.get('domain', '?')}")
+    print(f"  Gerado em: {config.get('generated_at', '?')}")
+    print(f"{'=' * 60}")
+    print("  Para cada item: (a)ceitar, (r)ejeitar, (e)ditar")
+    print("  Atalhos: (A) aceitar todos restantes, (R) rejeitar todos restantes")
+
+    # Review each category
+    list_categories = [
+        ("noise_terms", "Noise Terms"),
+        ("spam_indicators", "Spam Indicators"),
+        ("short_noise", "Short Noise"),
+        ("feedback_positive", "Feedback Positivo"),
+        ("feedback_negative", "Feedback Negativo"),
+    ]
+
+    for key, label in list_categories:
+        items = config.get(key, [])
+        if items:
+            config[key] = _review_list_items(items, label)
+
+    # Review feedback responses
+    if config.get("feedback_responses"):
+        config["feedback_responses"] = _review_feedback_responses(config["feedback_responses"])
+
+    # Review KB entries
+    if config.get("kb_entries"):
+        config["kb_entries"] = _review_kb_entries(config["kb_entries"])
+
+    # Summary
+    print(f"\n{'=' * 60}")
+    print("  RESUMO FINAL:")
+    print(f"{'=' * 60}")
+    print(f"  noise_terms:      {len(config.get('noise_terms', []))}")
+    print(f"  spam_indicators:  {len(config.get('spam_indicators', []))}")
+    print(f"  short_noise:      {len(config.get('short_noise', []))}")
+    print(f"  feedback_positive: {len(config.get('feedback_positive', []))}")
+    print(f"  feedback_negative: {len(config.get('feedback_negative', []))}")
+    print(f"  feedback_responses: {len(config.get('feedback_responses', {}))}")
+    print(f"  kb_entries:       {len(config.get('kb_entries', []))}")
+
+    resp = input("\n  Salvar e aprovar resultado da revisão? (s/n): ").strip().lower()
+    if resp in ("s", "sim", "y", "yes"):
+        config["approved"] = True
+        config["needs_human_review"] = False
+        config["review_method"] = "interactive"
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        print("  ✓ Configuração revisada e APROVADA.")
+    else:
+        # Save reviewed state but not approved (can re-review)
+        config["needs_human_review"] = True
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        print("  ✗ Revisão salva mas NÃO aprovada. Execute 'review' novamente ou 'approve' para aprovar.")
+
+
 # ==================== CLI ====================
 
 if __name__ == "__main__":
@@ -314,8 +501,14 @@ if __name__ == "__main__":
 
     import sys
 
-    if len(sys.argv) > 1 and sys.argv[1] == "approve":
-        # Aprovar configuração gerada
+    command = sys.argv[1] if len(sys.argv) > 1 else None
+
+    if command == "review":
+        # Interactive item-by-item review
+        interactive_review()
+
+    elif command == "approve":
+        # Quick approve all (approve everything as-is)
         data_dir = os.getenv("DATA_DIR", "./data")
         config_path = f"{data_dir}/{GENERATED_CONFIG_FILE}"
 
@@ -330,55 +523,47 @@ if __name__ == "__main__":
             print("✓ Configuração já está aprovada.")
             sys.exit(0)
 
-        print(f"=== Configuração gerada para: {config['domain']} ===\n")
-        print(f"noise_terms ({len(config['noise_terms'])}):")
-        for t in config["noise_terms"][:5]:
-            print(f"  - {t}")
-        if len(config["noise_terms"]) > 5:
-            print(f"  ... +{len(config['noise_terms'])-5} mais")
-
-        print(f"\nspam_indicators ({len(config['spam_indicators'])}):")
-        for t in config["spam_indicators"][:5]:
-            print(f"  - {t}")
-
-        print(f"\nshort_noise ({len(config['short_noise'])}):")
-        for t in config["short_noise"][:10]:
-            print(f"  - {t}")
-
-        print(f"\nfeedback_positive ({len(config['feedback_positive'])}):")
-        for t in config["feedback_positive"][:5]:
-            print(f"  - {t}")
-
-        print(f"\nfeedback_negative ({len(config['feedback_negative'])}):")
-        for t in config["feedback_negative"][:5]:
-            print(f"  - {t}")
-
-        print(f"\nfeedback_responses:")
-        for k, v in config.get("feedback_responses", {}).items():
-            print(f"  {k}: {v[:60]}...")
-
-        print(f"\nkb_entries ({len(config['kb_entries'])}):")
-        for e in config["kb_entries"][:3]:
-            print(f"  [{e['category']}] {e['intent']}: {e['title']}")
-            print(f"    symptoms: {e['symptoms'][:3]}")
-            print(f"    examples: {e['examples'][:3]}")
-        if len(config["kb_entries"]) > 3:
-            print(f"  ... +{len(config['kb_entries'])-3} mais")
+        print(f"=== Aprovar TUDO de uma vez: {config.get('domain', '?')} ===\n")
+        print(f"  noise_terms:       {len(config.get('noise_terms', []))}")
+        print(f"  spam_indicators:   {len(config.get('spam_indicators', []))}")
+        print(f"  short_noise:       {len(config.get('short_noise', []))}")
+        print(f"  feedback_positive: {len(config.get('feedback_positive', []))}")
+        print(f"  feedback_negative: {len(config.get('feedback_negative', []))}")
+        print(f"  kb_entries:        {len(config.get('kb_entries', []))}")
 
         print("\n" + "=" * 60)
-        resp = input("Aprovar esta configuração? (s/n): ").strip().lower()
+        resp = input("Aprovar TUDO sem revisão? (s/n): ").strip().lower()
 
         if resp in ("s", "sim", "y", "yes"):
             config["approved"] = True
             config["needs_human_review"] = False
+            config["review_method"] = "bulk_approve"
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
-            print("✓ Configuração APROVADA. O sistema agora usará esses termos expandidos.")
+            print("✓ Configuração APROVADA (bulk). O sistema usará esses termos.")
         else:
-            print("✗ Configuração NÃO aprovada. Edite o arquivo manualmente ou re-gere.")
+            print("✗ Não aprovada. Use 'review' para revisão item-a-item.")
+
+    elif command == "reset":
+        # Reset approval status (to re-review)
+        data_dir = os.getenv("DATA_DIR", "./data")
+        config_path = f"{data_dir}/{GENERATED_CONFIG_FILE}"
+
+        if not os.path.exists(config_path):
+            print("❌ Nenhuma configuração encontrada.")
+            sys.exit(1)
+
+        with open(config_path, encoding="utf-8") as f:
+            config = json.load(f)
+
+        config["approved"] = False
+        config["needs_human_review"] = True
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        print("✓ Status resetado. Execute 'review' para revisar novamente.")
 
     else:
-        # Gerar nova configuração
+        # Generate new config
         print("=== Gerando configuração do domínio via LLM ===\n")
         result = generate_domain_terms()
 
@@ -390,6 +575,8 @@ if __name__ == "__main__":
             print(f"  feedback_positive: {len(result.get('feedback_positive', []))}")
             print(f"  feedback_negative: {len(result.get('feedback_negative', []))}")
             print(f"  kb_entries: {len(result.get('kb_entries', []))}")
-            print(f"\n⚠️  Execute 'python -m kb.generate_domain_config approve' para revisar e aprovar.")
+            print(f"\n⚠️  Próximo passo:")
+            print(f"   python -m kb.generate_domain_config review    → Revisão item-a-item")
+            print(f"   python -m kb.generate_domain_config approve   → Aprovar tudo de uma vez")
         else:
             print("❌ Falha na geração.")
