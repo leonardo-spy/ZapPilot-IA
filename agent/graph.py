@@ -1,12 +1,12 @@
-"""
-Agentic RAG com LangGraph.
-Fluxo: load_memory → classify_intent → retrieve → generate_response → feedback_handler → human_handoff
+"""Agentic RAG with LangGraph.
+Flow: load_memory → classify_intent → retrieve → generate_response → feedback_handler → human_handoff
 """
 import json
 import logging
 from typing import TypedDict, Literal
 from langgraph.graph import StateGraph, END
 
+from config import get_locale
 from agent.prompts import (
     get_system_prompt,
     build_rag_prompt,
@@ -34,14 +34,15 @@ class AgentState(TypedDict):
     is_feedback: bool
     feedback_type: str
     resolved: bool
-    active_flow: str  # nome do flow ativo do playbook
-    flow_step: int  # step atual dentro do flow
+    active_flow: str  # active playbook flow name
+    flow_step: int  # current step within the flow
 
 
 # ==================== SINGLETON DEPENDENCIES ====================
 
 _memory: SQLiteMemory = None
 _llm: LLMProvider = None
+_domain: str = None
 
 
 def _get_memory() -> SQLiteMemory:
@@ -58,8 +59,17 @@ def _get_llm() -> LLMProvider:
     return _llm
 
 
+def _get_domain() -> str:
+    """Returns the active domain (from BOT_DOMAIN env var)."""
+    global _domain
+    if _domain is None:
+        import os
+        _domain = os.getenv("BOT_DOMAIN", "custom")
+    return _domain
+
+
 def init_dependencies(memory: SQLiteMemory = None, llm: LLMProvider = None):
-    """Inicializa dependências externamente (para testes/injeção)."""
+    """Initialize dependencies externally (for tests/injection)."""
     global _memory, _llm
     if memory:
         _memory = memory
@@ -70,13 +80,13 @@ def init_dependencies(memory: SQLiteMemory = None, llm: LLMProvider = None):
 # ==================== GRAPH NODES ====================
 
 def load_memory(state: AgentState) -> dict:
-    """Carrega contexto de memória do cliente + flow state."""
+    """Load customer memory context + flow state."""
     memory = _get_memory()
     customer_id = state["customer_id"]
 
-    memory_context = memory.get_memory_context(customer_id)
+    memory_context = memory.get_memory_context(customer_id, domain=_get_domain())
 
-    # Carregar flow state persistido
+    # Load persisted flow state
     flow_state = memory.get_flow_state(customer_id)
     active_flow = ""
     flow_step = 0
@@ -93,15 +103,28 @@ def load_memory(state: AgentState) -> dict:
 
 
 def classify_intent(state: AgentState) -> dict:
-    """Classifica intenção da mensagem usando LLM."""
+    """Classify message intent using LLM."""
     llm = _get_llm()
 
+    prompt = INTENT_CLASSIFICATION_PROMPT
+
+    # Add domain products so LLM recognizes product terms
+    try:
+        from agent.prompts import get_domain_config
+        domain = get_domain_config()
+        products = domain.get("products", [])
+        if products:
+            prompt += f"\n\nProdutos/termos deste negócio: {', '.join(products)}"
+            prompt += "\nSe a mensagem mencionar estes termos, é sales ou info (NUNCA greeting)."
+    except Exception:
+        pass
+
     messages = [
-        {"role": "system", "content": INTENT_CLASSIFICATION_PROMPT},
+        {"role": "system", "content": prompt},
         {"role": "user", "content": state["user_message"]},
     ]
 
-    # Se tiver contexto de memória, incluir
+    # Include memory context if available
     if state.get("memory_context"):
         messages[0]["content"] += f"\n\nContexto do cliente:\n{state['memory_context']}"
 
@@ -110,14 +133,14 @@ def classify_intent(state: AgentState) -> dict:
         # Extrair JSON da resposta
         result = _parse_json_response(response)
 
-        intent = result.get("intent", "geral")
+        intent = result.get("intent", "general")
         confidence = float(result.get("confidence", 0.5))
         needs_retrieval = result.get("needs_retrieval", True)
         retrieval_top_k = int(result.get("retrieval_top_k", 3))
 
     except Exception as e:
-        logger.warning(f"[classify_intent] Erro ao classificar: {e}")
-        intent = "geral"
+        logger.warning(f"[classify_intent] Classification error: {e}")
+        intent = "general"
         confidence = 0.3
         needs_retrieval = True
         retrieval_top_k = 3
@@ -133,8 +156,8 @@ def classify_intent(state: AgentState) -> dict:
 
 
 def check_feedback(state: AgentState) -> dict:
-    """Verifica se a mensagem é feedback — usa detecção semântica + LLM."""
-    # Primeiro tenta detecção semântica rápida via embeddings do domínio
+    """Check if message is feedback — uses semantic detection + LLM."""
+    # First try fast semantic detection via domain embeddings
     try:
         from preprocessing.cleaner import is_semantic_feedback
         semantic_result = is_semantic_feedback(state["user_message"], threshold=0.7)
@@ -148,7 +171,7 @@ def check_feedback(state: AgentState) -> dict:
     except Exception as e:
         logger.debug(f"[check_feedback] Semantic fallback: {e}")
 
-    # Fallback: usa LLM para detecção mais precisa
+    # Fallback: use LLM for more precise detection
     llm = _get_llm()
 
     messages = [
@@ -165,7 +188,7 @@ def check_feedback(state: AgentState) -> dict:
         resolved = result.get("resolved", False)
 
     except Exception as e:
-        logger.warning(f"[check_feedback] Erro: {e}")
+        logger.warning(f"[check_feedback] Error: {e}")
         is_feedback = False
         feedback_type = "neutral"
         resolved = False
@@ -178,7 +201,7 @@ def check_feedback(state: AgentState) -> dict:
 
 
 def retrieve(state: AgentState) -> dict:
-    """Busca documentos relevantes com retriever híbrido."""
+    """Search relevant documents with hybrid retriever."""
     if not state.get("needs_retrieval", False):
         logger.info("[retrieve] Skipping (needs_retrieval=False)")
         return {"retrieved_docs": [], "route": "direct"}
@@ -186,53 +209,63 @@ def retrieve(state: AgentState) -> dict:
     query = state["user_message"]
     top_k = state.get("retrieval_top_k", 3)
 
-    # Filtrar por categoria se intent for clara
+    # Filter by category if intent is clear
     category_filter = None
-    if state["intent"] == "venda":
-        category_filter = "venda"
-    elif state["intent"] == "suporte":
-        category_filter = "suporte"
+    if state["intent"] == "sales":
+        category_filter = "sales"
+    elif state["intent"] == "support":
+        category_filter = "support"
 
     try:
         docs = hybrid_search(
             query=query,
             top_k=top_k,
             category_filter=category_filter,
+            domain=_get_domain(),
         )
         retrieved = [d.to_dict() for d in docs]
     except Exception as e:
-        logger.warning(f"[retrieve] Erro na busca: {e}")
+        logger.warning(f"[retrieve] Search error: {e}")
         retrieved = []
 
     route = "rag" if retrieved else "no_context"
-    logger.info(f"[retrieve] {len(retrieved)} docs recuperados, route={route}")
+    logger.info(f"[retrieve] {len(retrieved)} docs retrieved, route={route}")
 
     return {"retrieved_docs": retrieved, "route": route}
 
 
 def generate_response(state: AgentState) -> dict:
-    """Gera resposta usando LLM com contexto RAG + memória + playbook."""
+    """Generate response using LLM with RAG context + memory + playbook."""
     llm = _get_llm()
-    intent = state.get("intent", "geral")
+    intent = state.get("intent", "general")
     confidence = state.get("confidence", 0.5)
 
-    # Se é feedback, tratar diferente
+    # If feedback, handle differently
     if state.get("is_feedback"):
         return _handle_feedback_response(state)
 
-    # Se confiança muito baixa ou intent é humano, encaminhar
-    if confidence < 0.3 or intent == "humano":
+    # If confidence too low or intent is human, hand off
+    # BUT: if there's an active flow, try flow/LLM response first
+    active_flow = state.get("active_flow", "")
+    if intent == "human":
+        return _human_handoff_response(state)
+    if confidence < 0.3 and not active_flow:
         return _human_handoff_response(state)
 
-    # Montar contexto
+    # === PLAYBOOK: try direct execution (literal messages) ===
+    direct = _try_direct_flow_response(state)
+    if direct:
+        return direct
+
+    # Build context
     system_prompt = get_system_prompt(intent)
 
-    # === PLAYBOOK: injetar instruções e flow no prompt ===
+    # === PLAYBOOK: inject instructions and flow into prompt ===
     playbook_context, detected_flow = _build_playbook_context(state)
     if playbook_context:
         system_prompt += "\n" + playbook_context
 
-    # Contexto dos documentos recuperados
+    # Retrieved documents context
     docs_context = ""
     if state.get("retrieved_docs"):
         docs_context = "\n\n---\n\n".join(
@@ -253,17 +286,19 @@ def generate_response(state: AgentState) -> dict:
     try:
         response = llm.chat(messages, temperature=0.3, max_tokens=512)
     except Exception as e:
-        logger.error(f"[generate_response] Erro LLM: {e}")
-        response = "Desculpe, estou com dificuldade técnica. Vou encaminhar para suporte humano."
+        logger.error(f"[generate_response] LLM error: {e}")
+        locale = get_locale()
+        response = locale.get("errors", {}).get("technical_difficulty", "Technical error.")
 
-    # Se route era no_context e não temos docs, pode ter baixa confiança
+    # If route was no_context and we have no docs, might be low confidence
     if state.get("route") == "no_context" and confidence < 0.6:
-        response += "\n\n_Se precisar de mais informações, posso encaminhar para um atendente._"
+        locale = get_locale()
+        response += locale.get("errors", {}).get("low_confidence_suffix", "")
 
     logger.info(f"[generate_response] intent={intent}, flow={detected_flow or 'none'}, response_len={len(response)}")
 
     result = {"response": response, "route": state.get("route", "direct")}
-    # Propagar flow detectado para state (usado por save_to_memory)
+    # Propagate detected flow to state (used by save_to_memory)
     if detected_flow and not state.get("active_flow"):
         result["active_flow"] = detected_flow
         result["flow_step"] = 0
@@ -271,26 +306,27 @@ def generate_response(state: AgentState) -> dict:
 
 
 def save_to_memory(state: AgentState) -> dict:
-    """Salva interação na memória + atualiza flow state."""
+    """Save interaction to memory + update flow state."""
     memory = _get_memory()
     customer_id = state["customer_id"]
     intent = state.get("intent", "")
+    domain = _get_domain()
 
-    # Salvar mensagem do usuário
-    memory.save_message(customer_id, "user", state["user_message"], intent=intent)
+    # Save user message
+    memory.save_message(customer_id, "user", state["user_message"], intent=intent, domain=domain)
 
-    # Salvar resposta do bot
+    # Save bot response
     if state.get("response"):
-        memory.save_message(customer_id, "assistant", state["response"], intent=intent)
+        memory.save_message(customer_id, "assistant", state["response"], intent=intent, domain=domain)
 
-    # Se é feedback, atualizar caso
+    # If feedback, update case
     if state.get("is_feedback") and state.get("feedback_type") == "positive":
         cases = memory.get_open_cases(customer_id)
         for case in cases:
             memory.resolve_case(case["id"])
 
-    # Se é suporte/venda, criar/atualizar caso
-    if intent in ("suporte", "venda") and state.get("confidence", 0) > 0.5:
+    # If support/sales, create/update case
+    if intent in ("support", "sales") and state.get("confidence", 0) > 0.5:
         memory.create_or_update_case(
             customer_id=customer_id,
             intent=intent,
@@ -299,27 +335,31 @@ def save_to_memory(state: AgentState) -> dict:
             resolved=state.get("resolved", False),
         )
 
-    # === FLOW STATE: avançar ou limpar ===
+    # === FLOW STATE: advance or clear ===
     _update_flow_state(state, memory, customer_id)
 
-    logger.info(f"[save_to_memory] Salvo para customer={customer_id}")
+    # === KNOWLEDGE GAP DETECTION ===
+    _detect_knowledge_gap(state, memory, customer_id)
+
+    logger.info(f"[save_to_memory] Saved for customer={customer_id}")
     return {}
 
 
 def _update_flow_state(state: AgentState, memory, customer_id: str):
-    """Atualiza o flow state após cada turno com lógica de pausa/retomada."""
+    """Update flow state after each turn with pause/resume logic."""
     active_flow = state.get("active_flow", "")
     flow_step = state.get("flow_step", 0)
     intent = state.get("intent", "")
 
-    # Se mudou de intent para feedback/humano/fora_da_base → ABANDONAR flow
-    if intent in ("feedback_positivo", "feedback_negativo", "humano", "fora_da_base"):
+    # If intent changed to feedback/human → ABANDON flow
+    # out_of_scope does NOT abandon (may be a question within the sales context)
+    if intent in ("feedback_positive", "feedback_negative", "human"):
         if active_flow:
             memory.clear_flow_state(customer_id)
-            logger.info(f"[flow_state] Flow '{active_flow}' abandonado (intent={intent})")
+            logger.info(f"[flow_state] Flow '{active_flow}' abandoned (intent={intent})")
         return
 
-    # Se não tem flow ativo → tentar selecionar um novo
+    # If no active flow → try to select a new one
     if not active_flow:
         try:
             from config import get_flow_by_trigger
@@ -329,58 +369,125 @@ def _update_flow_state(state: AgentState, memory, customer_id: str):
                 active_flow = flow["name"]
                 flow_step = 0
                 memory.save_flow_state(customer_id, active_flow, flow_step)
-                logger.info(f"[flow_state] Novo flow: '{active_flow}'")
+                logger.info(f"[flow_state] New flow: '{active_flow}'")
         except Exception as e:
-            logger.debug(f"[flow_state] Sem flow: {e}")
+            logger.debug(f"[flow_state] No flow: {e}")
         return
 
-    # Tem flow ativo → verificar se intent bate com o trigger do flow
+    # Active flow → check if intent matches the flow trigger
     try:
         from config import get_playbook_flows
         flows = get_playbook_flows()
         flow_def = flows.get(active_flow, {})
         trigger_intent = flow_def.get("trigger", {}).get("intent", "")
 
-        if trigger_intent and trigger_intent != intent:
-            # Intent diferente → PAUSAR (manter state, não avançar)
-            logger.info(f"[flow_state] Flow '{active_flow}' pausado (intent={intent} != trigger={trigger_intent})")
-            return
+        if trigger_intent and trigger_intent != intent and not (
+            intent == "greeting" and trigger_intent == "sales"
+        ):
+            # Check if we're on a condition/wait_response step
+            # (client responding to flow question → always continue)
+            steps_list = flow_def.get("steps", [])
+            current_step_action = ""
+            if flow_step < len(steps_list):
+                current_step_action = steps_list[flow_step].get("action", "")
 
-        # Intent bate → AVANÇAR step
+            if current_step_action not in ("condition", "wait_response", "send", "send_sequence"):
+                # Different intent and not responding → PAUSE
+                logger.info(f"[flow_state] Flow '{active_flow}' paused (intent={intent} != trigger={trigger_intent})")
+                return
+            else:
+                logger.info(f"[flow_state] Flow '{active_flow}' continues (responding to {current_step_action})")
+
+        # Intent matches → ADVANCE step
         steps = flow_def.get("steps", [])
         next_step = _find_next_wait_step(steps, flow_step)
 
         if next_step is None or next_step >= len(steps):
-            # Flow concluído
+            # Flow completed
             memory.clear_flow_state(customer_id)
-            logger.info(f"[flow_state] Flow '{active_flow}' concluído")
+            logger.info(f"[flow_state] Flow '{active_flow}' completed")
         else:
             memory.save_flow_state(customer_id, active_flow, next_step)
             logger.info(f"[flow_state] Flow '{active_flow}' → step {next_step}")
     except Exception as e:
-        logger.debug(f"[flow_state] Erro ao avançar: {e}")
+        logger.debug(f"[flow_state] Error advancing: {e}")
         memory.save_flow_state(customer_id, active_flow, flow_step + 2)
 
 
 def _find_next_wait_step(steps: list, current_step: int) -> int | None:
     """
-    Encontra o próximo wait_response APÓS o step atual.
-    Retorna o índice do step APÓS esse wait (onde o flow deve continuar).
+    Find the next wait_response AFTER the current step.
+    Returns the index of the step AFTER that wait (where the flow should continue).
     """
-    # Percorrer a partir do step atual + 1
+    # Iterate from current step + 1
     for i in range(current_step + 1, len(steps)):
         if steps[i].get("action") == "wait_response":
-            # O flow vai esperar aqui; na próxima msg, continuamos do step seguinte
+            # Flow will wait here; on next message, continue from next step
             return i + 1
 
-    # Se não encontrou mais wait_response, o flow está no final
+    # If no more wait_response found, flow is at the end
     return len(steps)
+
+
+def _detect_knowledge_gap(state: AgentState, memory, customer_id: str):
+    """
+    Detects when the agent lacked sufficient context to answer well.
+    Records to knowledge_gaps table for later analysis/recommendations.
+
+    Triggers:
+    - route == "no_context" (retrieval returned nothing)
+    - low confidence + needs_retrieval (tried to search but got poor results)
+    - intent is info/support/sales but 0 docs retrieved
+    """
+    route = state.get("route", "")
+    intent = state.get("intent", "")
+    confidence = state.get("confidence", 0.0)
+    retrieved_docs = state.get("retrieved_docs", [])
+    needs_retrieval = state.get("needs_retrieval", False)
+
+    # Skip non-informational intents (greeting, feedback, human, etc.)
+    skip_intents = ("greeting", "feedback_positive", "feedback_negative", "human", "out_of_scope")
+    if intent in skip_intents:
+        return
+
+    # Skip playbook-handled messages (they have their own scripted responses)
+    if route == "playbook":
+        return
+
+    is_gap = False
+
+    # Case 1: Retrieval returned nothing
+    if route == "no_context":
+        is_gap = True
+
+    # Case 2: Needed retrieval, got docs but confidence is very low
+    elif needs_retrieval and len(retrieved_docs) == 0:
+        is_gap = True
+
+    # Case 3: Has retrieval but confidence still below threshold
+    elif needs_retrieval and confidence < 0.4 and len(retrieved_docs) <= 1:
+        is_gap = True
+
+    if is_gap:
+        try:
+            memory.record_knowledge_gap(
+                customer_id=customer_id,
+                query=state.get("user_message", ""),
+                intent=intent,
+                route=route,
+                confidence=confidence,
+                retrieved_docs_count=len(retrieved_docs),
+                domain=_get_domain(),
+            )
+            logger.info(f"[knowledge_gap] Recorded: intent={intent}, route={route}, docs={len(retrieved_docs)}")
+        except Exception as e:
+            logger.debug(f"[knowledge_gap] Failed to record: {e}")
 
 
 # ==================== HELPERS ====================
 
 def _handle_feedback_response(state: AgentState) -> dict:
-    """Gera resposta para feedback usando respostas geradas (se aprovadas) ou defaults."""
+    """Generate response for feedback using pre-approved responses or defaults."""
     from kb.generate_domain_config import get_feedback_responses
     responses = get_feedback_responses()
 
@@ -388,12 +495,13 @@ def _handle_feedback_response(state: AgentState) -> dict:
         response = responses["positive"]
         route = "feedback_resolved"
     elif state.get("feedback_type") == "negative":
-        # Buscar na KB se há segunda abordagem
+        # Search KB for second approach
         try:
             from retrieval.hybrid_retriever import hybrid_search
             docs = hybrid_search(
                 state["user_message"],
                 top_k=2,
+                domain=_get_domain(),
             )
             if docs:
                 response = responses["negative_with_docs"]
@@ -409,22 +517,303 @@ def _handle_feedback_response(state: AgentState) -> dict:
     return {"response": response, "route": route}
 
 
+# Condition keywords loaded from config (cached)
+_condition_hints_cache: dict | None = None
+
+
+def _get_condition_hints() -> dict[str, dict]:
+    """Load condition hints from playbook config (cached)."""
+    global _condition_hints_cache
+    if _condition_hints_cache is None:
+        try:
+            from config import get_playbook_condition_hints
+            _condition_hints_cache = get_playbook_condition_hints()
+        except Exception:
+            _condition_hints_cache = {}
+    return _condition_hints_cache
+
+
+def _keyword_precheck(condition: str, user_msg: str) -> bool | None:
+    """Returns True/False if keywords match, None if LLM is needed."""
+    hints = _get_condition_hints()
+    hint = hints.get(condition)
+    if not hint or not isinstance(hint, dict):
+        return None
+    keywords = hint.get("keywords_true", [])
+    if not keywords:
+        return None
+    msg_lower = f" {user_msg.lower().strip()} "
+    for kw in keywords:
+        if kw in msg_lower:
+            return True
+    return None  # No positive match → let LLM decide
+
+
+def _evaluate_condition_branch(
+    step: dict, state: AgentState, messages: dict
+) -> list[str] | None:
+    """
+    Evaluates a condition step using LLM to decide the branch (then/else).
+    Returns list of literal messages from chosen branch, or None on failure.
+    """
+    condition = step.get("if", "")
+    then_actions = step.get("then", [])
+    else_actions = step.get("else", [])
+    user_msg = state.get("user_message", "")
+
+    if not condition or (not then_actions and not else_actions):
+        return None
+
+    # Pre-check via keywords before calling LLM (avoids rate limit + inconsistencies)
+    is_true = _keyword_precheck(condition, user_msg)
+    if is_true is not None:
+        logger.info(f"[condition_eval] '{condition}' → {'yes' if is_true else 'no'} (keyword_match)")
+        branch = then_actions if is_true else else_actions
+        if not branch:
+            return []
+        return _collect_branch_messages(branch, state, messages)
+
+    # Build eval prompt dynamically from config hints + locale
+    hints = _get_condition_hints()
+    locale = get_locale()
+    cond_locale = locale.get("condition_eval", {})
+
+    hint_lines = []
+    for cond_name, hint in hints.items():
+        if isinstance(hint, dict) and "description" in hint:
+            hint_lines.append(f"- {cond_name}: {hint['description']}")
+    negative_examples = hints.get("negative_examples", "")
+
+    eval_intro = cond_locale.get("eval_intro", "Evaluate if the condition is TRUE.\n")
+    cond_label = cond_locale.get("condition_label", "Condition: {condition}").format(condition=condition)
+    msg_label = cond_locale.get("message_label", "Client message: \"{message}\"").format(message=user_msg)
+
+    eval_prompt = f"{eval_intro}\n{cond_label}\n{msg_label}\n\n"
+
+    if hint_lines:
+        eval_prompt += cond_locale.get("hints_header", "Interpretation guide:") + "\n"
+        eval_prompt += "\n".join(hint_lines) + "\n\n"
+    if negative_examples:
+        prefix = cond_locale.get("important_prefix", "IMPORTANT: ")
+        eval_prompt += f"{prefix}{negative_examples}\n"
+    eval_prompt += cond_locale.get("response_instruction", "Answer ONLY 'yes' or 'no'.")
+
+    positive_kw = cond_locale.get("positive_answer", "yes")
+
+    # LLM call: just decides yes or no
+    llm = _get_llm()
+    try:
+        system_content = cond_locale.get(
+            "system_prompt",
+            "You evaluate conditions about client messages. Answer only 'yes' or 'no'."
+        )
+        eval_messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": eval_prompt},
+        ]
+        result = llm.chat(eval_messages)
+        answer = result.strip().lower()
+        is_true = answer.startswith(positive_kw)
+        logger.info(f"[condition_eval] '{condition}' → {answer} (is_true={is_true})")
+    except Exception as e:
+        logger.warning(f"[condition_eval] Failed to evaluate '{condition}': {e}")
+        return None
+
+    # Choose branch
+    branch = then_actions if is_true else else_actions
+    if not branch:
+        return []
+
+    # Collect literal messages from branch
+    parts = _collect_branch_messages(branch, state, messages)
+    return parts
+
+
+def _collect_branch_messages(
+    actions: list[dict], state: AgentState, messages: dict
+) -> list[str]:
+    """Collect literal messages from an action list (supports nested conditions)."""
+    parts = []
+    for sub in actions:
+        sub_action = sub.get("action", "")
+        if sub_action == "send":
+            mk = sub.get("message", "")
+            m = messages.get(mk, {})
+            m_type = m.get("type", "text")
+            content = m.get("content", "")
+            if content:
+                if m_type == "image":
+                    parts.append(f"[IMAGEM: {m.get('caption', mk)}]\n{content}")
+                else:
+                    parts.append(content.strip())
+        elif sub_action == "send_sequence":
+            msg_keys = sub.get("messages", [])
+            for smk in msg_keys:
+                sm = messages.get(smk, {})
+                sm_type = sm.get("type", "text")
+                sm_content = sm.get("content", "")
+                if sm_content:
+                    if sm_type == "image":
+                        parts.append(f"[IMAGEM: {sm.get('caption', smk)}]\n{sm_content}")
+                    else:
+                        parts.append(sm_content.strip())
+        elif sub_action == "condition":
+            # Nested condition — evaluate recursively
+            nested = _evaluate_condition_branch(sub, state, messages)
+            if nested is not None:
+                parts.extend(nested)
+            else:
+                break  # Evaluation failed — stop
+        elif sub_action == "goto_flow":
+            break
+        elif sub_action == "wait_response":
+            break
+        else:
+            # generate_response etc — parar
+            break
+    return parts
+
+
 def _human_handoff_response(state: AgentState) -> dict:
-    """Resposta de encaminhamento para humano."""
-    response = "Vou encaminhar para suporte humano para verificar melhor seu caso. Um atendente entrará em contato em breve."
+    """Human handoff response."""
+    locale = get_locale()
+    response = locale.get("human_handoff", {}).get(
+        "response", "Forwarding to human support."
+    )
     return {"response": response, "route": "human_handoff"}
+
+
+def _try_direct_flow_response(state: AgentState) -> dict | None:
+    """
+    Try to execute flow steps directly (without LLM).
+    When the current step is send/send_sequence, returns LITERAL messages.
+    Returns None if LLM is needed (condition, generate_response, etc).
+    """
+    active_flow = state.get("active_flow", "")
+    flow_step = state.get("flow_step", 0)
+
+    # If no active flow, try to discover one (for greeting → sales)
+    if not active_flow:
+        try:
+            from config import get_flow_by_trigger
+            current_intent = state.get("intent", "")
+            conditions = _resolve_flow_conditions(state)
+
+            flow = get_flow_by_trigger(intent=current_intent, conditions=conditions)
+
+            # If greeting didn't find flow, try with sales
+            if not flow and current_intent == "greeting":
+                flow = get_flow_by_trigger(intent="sales", conditions=conditions)
+
+            if flow:
+                active_flow = flow["name"]
+                flow_step = 0
+            else:
+                return None
+        except Exception:
+            return None
+
+    try:
+        from config import get_playbook_flows, get_playbook_messages
+        flows = get_playbook_flows()
+        messages = get_playbook_messages()
+    except Exception:
+        return None
+
+    flow_def = flows.get(active_flow)
+    if not flow_def:
+        return None
+
+    steps = flow_def.get("steps", [])
+    if flow_step >= len(steps):
+        return None
+
+    current = steps[flow_step]
+    action = current.get("action", "")
+
+    # Executes send/send_sequence/condition directly
+    if action not in ("send", "send_sequence", "condition"):
+        return None
+
+    # Collect all consecutive messages until wait_response
+    response_parts = []
+    for i in range(flow_step, len(steps)):
+        step = steps[i]
+        act = step.get("action", "")
+
+        if act == "send":
+            msg_key = step.get("message", "")
+            msg = messages.get(msg_key, {})
+            msg_type = msg.get("type", "text")
+            content = msg.get("content", step.get("content", ""))
+            if content:
+                if msg_type == "image":
+                    caption = msg.get("caption", "")
+                    response_parts.append(f"[IMAGEM: {caption}]\n{content}")
+                else:
+                    response_parts.append(content.strip())
+
+        elif act == "send_sequence":
+            msg_keys = step.get("messages", [])
+            for mk in msg_keys:
+                m = messages.get(mk, {})
+                m_type = m.get("type", "text")
+                m_content = m.get("content", "")
+                if m_content:
+                    if m_type == "image":
+                        caption = m.get("caption", "")
+                        response_parts.append(f"[IMAGEM: {caption}]\n{m_content}")
+                    else:
+                        response_parts.append(m_content.strip())
+
+        elif act == "condition":
+            # Evaluate condition with LLM (yes/no) and pick correct branch
+            branch_msgs = _evaluate_condition_branch(step, state, messages)
+            if branch_msgs is not None:
+                response_parts.extend(branch_msgs)
+                # Continue collecting steps after the condition
+            else:
+                # Could not evaluate — stop and let full LLM handle
+                break
+
+        elif act == "wait_response":
+            break  # Stop here — bot waits for client response
+
+        elif act in ("generate_response", "goto_flow"):
+            break  # Needs LLM — stop and let next node handle
+
+        else:
+            break
+
+    if not response_parts:
+        return None
+
+    # Join with separator for individual messages
+    response = "\n---MSG---\n".join(response_parts)
+
+    logger.info(
+        f"[direct_flow] Flow '{active_flow}' step {flow_step}: "
+        f"{len(response_parts)} literal messages sent"
+    )
+
+    return {
+        "response": response,
+        "route": "playbook",
+        "active_flow": active_flow,
+        "flow_step": flow_step,
+    }
 
 
 def _build_playbook_context(state: AgentState) -> tuple[str, str]:
     """
-    Constrói contexto do playbook para injetar no system prompt.
-    Inclui: instruções gerais + flow ativo (se intent compatível).
-    Returns: (context_str, flow_name) — flow_name pode ser vazio.
+    Build playbook context to inject into system prompt.
+    Includes: general instructions + active flow (if intent is compatible).
+    Returns: (context_str, flow_name) — flow_name may be empty.
 
-    Lógica de pausa/retomada:
-    - Se há flow ativo E intent bate com o trigger → mostra flow (retoma)
-    - Se há flow ativo MAS intent diferente → NÃO mostra flow (pausa)
-    - Se não há flow → tenta descobrir um novo
+    Pause/resume logic:
+    - If there's an active flow AND intent matches trigger → show flow (resume)
+    - If there's an active flow BUT different intent → DON'T show flow (pause)
+    - If no flow → try to discover a new one
     """
     try:
         from config import get_playbook_instructions, get_flow_by_trigger, get_playbook_flows
@@ -433,12 +822,16 @@ def _build_playbook_context(state: AgentState) -> tuple[str, str]:
 
     parts = []
 
-    # 1. Instruções gerais do dono (sempre presentes)
+    # 1. Owner instructions (always present)
     instructions = get_playbook_instructions()
     if instructions:
-        parts.append(f"--- Instruções do atendimento ---\n{instructions.strip()}")
+        locale = get_locale()
+        header = locale.get("playbook_context", {}).get(
+            "instructions_header", "--- Instructions ---"
+        )
+        parts.append(f"{header}\n{instructions.strip()}")
 
-    # 2. Flow: verificar compatibilidade de intent
+    # 2. Flow: check intent compatibility
     active_flow = state.get("active_flow", "")
     flow_step = state.get("flow_step", 0)
     current_intent = state.get("intent", "")
@@ -451,25 +844,45 @@ def _build_playbook_context(state: AgentState) -> tuple[str, str]:
         flow_def = flows.get(active_flow)
         if flow_def:
             trigger_intent = flow_def.get("trigger", {}).get("intent", "")
+            steps = flow_def.get("steps", [])
 
-            if not trigger_intent or trigger_intent == current_intent:
-                # Intent compatível → RETOMAR flow
+            # If we're on a condition/wait step, client is RESPONDING
+            # to the flow → always continue, regardless of classified intent
+            current_step_action = ""
+            if flow_step < len(steps):
+                current_step_action = steps[flow_step].get("action", "")
+
+            is_responding_to_flow = current_step_action in (
+                "condition", "wait_response", "send", "send_sequence"
+            )
+
+            if is_responding_to_flow or not trigger_intent or trigger_intent == current_intent or (
+                current_intent == "greeting" and trigger_intent == "sales"
+            ):
+                # Compatible intent or responding to flow → RESUME
                 flow = {**flow_def, "name": active_flow}
                 detected_flow_name = active_flow
+            elif current_intent == "human":
+                # Asked for human → abandon flow
+                pass
             else:
-                # Intent diferente → PAUSAR (não mostrar flow, LLM responde livre)
-                # Adicionar nota ao LLM sobre o flow pausado
-                parts.append(
-                    f"--- Nota: há um roteiro de {trigger_intent} em andamento com este cliente. "
-                    f"Se ele voltar ao assunto, retome de onde parou. ---"
-                )
+                # Different intent → PAUSE (don't show flow, LLM responds freely)
+                locale = get_locale()
+                note = locale.get("playbook_context", {}).get(
+                    "flow_paused_note",
+                    "--- Note: there's a {intent} flow in progress. ---"
+                ).format(intent=trigger_intent)
+                parts.append(note)
     else:
-        # Sem flow ativo → tentar descobrir um novo
+        # No active flow → try to discover a new one
         conditions = _resolve_flow_conditions(state)
         flow = get_flow_by_trigger(
             intent=current_intent,
             conditions=conditions,
         )
+        # If greeting didn't find a flow, try with sales (in sales bots, greeting = sales start)
+        if not flow and current_intent == "greeting":
+            flow = get_flow_by_trigger(intent="sales", conditions=conditions)
         flow_step = 0
         if flow:
             detected_flow_name = flow.get("name", "")
@@ -485,23 +898,23 @@ def _build_playbook_context(state: AgentState) -> tuple[str, str]:
 
 def _resolve_flow_conditions(state: AgentState) -> dict:
     """
-    Resolve condições do cliente para seleção de flow.
-    Baseado na memória e estado da conversa.
+    Resolve client conditions for flow selection.
+    Based on memory and conversation state.
     """
     memory = _get_memory()
     customer_id = state.get("customer_id", "")
     conditions = {}
 
     try:
-        # Cliente novo = sem histórico de mensagens
+        # New client = no message history
         history = memory.get_recent_history(customer_id, limit=1)
         conditions["client_is_new"] = len(history) == 0
         conditions["client_has_history"] = len(history) > 0
 
-        # Cliente comprador = tem caso de venda resolvido
+        # Buyer client = has resolved sales case
         cases = memory.get_open_cases(customer_id)
-        # Se NÃO tem casos abertos de venda, pode já ter comprado antes
-        # (heurística: se tem histórico mas não tem caso aberto = já comprou)
+        # If NO open sales cases, may have already bought
+        # (heuristic: has history but no open case = already bought)
         conditions["client_is_buyer"] = (
             len(history) > 0 and len(cases) == 0
         )
@@ -515,8 +928,9 @@ def _resolve_flow_conditions(state: AgentState) -> dict:
 
 def _format_flow_for_prompt(flow: dict, state: AgentState, from_step: int = 0) -> str:
     """
-    Formata o flow selecionado como contexto para o LLM.
-    Mostra apenas steps a partir de from_step (estado persistido).
+    Format the selected flow as context for the LLM.
+    Shows only steps from from_step onwards (persisted state).
+    Includes FULL messages for LLM to reproduce LITERALLY.
     """
     try:
         from config import get_playbook_messages
@@ -524,16 +938,21 @@ def _format_flow_for_prompt(flow: dict, state: AgentState, from_step: int = 0) -
     except Exception:
         messages = {}
 
+    locale = get_locale()
+    fmt = locale.get("flow_format", {})
+
     all_steps = flow.get("steps", [])
     remaining_steps = all_steps[from_step:]
 
     if not remaining_steps:
         return ""
 
-    parts = [f"--- Roteiro ativo: {flow.get('description', flow['name'])} ---"]
+    header = fmt.get("active_flow_header", "--- Active flow: {description} ---")
+    parts = [header.format(description=flow.get("description", flow["name"]))]
     if from_step > 0:
-        parts.append(f"(Continuação — etapa {from_step + 1} de {len(all_steps)})")
-    parts.append("Siga este roteiro de conversa (adapte o tom, não copie literalmente):\n")
+        cont = fmt.get("continuation", "(Continuation — step {step} of {total})")
+        parts.append(cont.format(step=from_step + 1, total=len(all_steps)))
+    parts.append(fmt.get("literal_instruction", "IMPORTANT: Copy messages EXACTLY as written below.") + "\n")
 
     for i, step in enumerate(remaining_steps, from_step + 1):
         action = step.get("action", "")
@@ -543,67 +962,89 @@ def _format_flow_for_prompt(flow: dict, state: AgentState, from_step: int = 0) -
             msg = messages.get(msg_key, {})
             content = msg.get("content", step.get("content", ""))
             if content:
-                parts.append(f"  {i}. ENVIAR: \"{content.strip()[:200]}\"")
+                label = fmt.get("send_literal", "  {i}. SEND (literal):").format(i=i)
+                parts.append(f"{label}\n\"\"\"\n{content.strip()}\n\"\"\"")
 
         elif action == "send_sequence":
             msg_keys = step.get("messages", [])
-            contents = []
+            label = fmt.get("send_sequence", "  {i}. SEND SEQUENCE:").format(i=i)
+            parts.append(label)
             for mk in msg_keys:
                 m = messages.get(mk, {})
                 if m.get("type") == "text":
-                    contents.append(m.get("content", "")[:80].strip())
+                    parts.append(f"     → \"\"\"\n{m.get('content', '').strip()}\n\"\"\"")
                 elif m.get("type") == "image":
-                    contents.append(f"[IMAGEM: {m.get('caption', mk)}]")
-            parts.append(f"  {i}. ENVIAR SEQUÊNCIA: {', '.join(contents[:3])}...")
+                    parts.append(f"     → [IMAGEM: {m.get('caption', mk)}]")
 
         elif action == "wait_response":
-            parts.append(f"  {i}. AGUARDAR resposta do cliente")
+            label = fmt.get("wait_response", "  {i}. WAIT for client response").format(i=i)
+            parts.append(label)
+            break  # Don't show steps after the next wait
 
         elif action == "condition":
             cond = step.get("if", "")
-            parts.append(f"  {i}. SE {cond}:")
+            label = fmt.get("evaluate_condition", "  {i}. EVALUATE — IF {condition}:").format(i=i, condition=cond)
+            parts.append(label)
             if step.get("then"):
-                for sub in step["then"][:2]:
+                parts.append(fmt.get("then_label", "     THEN:"))
+                for sub in step["then"]:
                     if sub.get("action") == "send":
                         mk = sub.get("message", "")
                         m = messages.get(mk, {})
-                        parts.append(f"       → enviar: \"{m.get('content', mk)[:100].strip()}\"")
+                        content = m.get("content", mk)
+                        send_label = fmt.get("send_in_branch", "       SEND (literal):")
+                        parts.append(f"{send_label}\n\"\"\"\n{content.strip()}\n\"\"\"")
                     elif sub.get("action") == "goto_flow":
-                        parts.append(f"       → seguir roteiro: {sub.get('flow')}")
+                        goto = fmt.get("goto_flow_branch", "       → follow flow: {flow}").format(flow=sub.get("flow"))
+                        parts.append(goto)
             if step.get("else"):
-                parts.append(f"     SENÃO:")
-                for sub in step["else"][:2]:
+                parts.append(fmt.get("else_label", "     ELSE:"))
+                for sub in step["else"]:
                     if sub.get("action") == "send":
                         mk = sub.get("message", "")
                         m = messages.get(mk, {})
-                        parts.append(f"       → enviar: \"{m.get('content', mk)[:100].strip()}\"")
+                        content = m.get("content", mk)
+                        send_label = fmt.get("send_in_branch", "       SEND (literal):")
+                        parts.append(f"{send_label}\n\"\"\"\n{content.strip()}\n\"\"\"")
+                    elif sub.get("action") == "goto_flow":
+                        goto = fmt.get("goto_flow_branch", "       → follow flow: {flow}").format(flow=sub.get("flow"))
+                        parts.append(goto)
 
         elif action == "generate_response":
-            parts.append(f"  {i}. RESPONDER usando base de conhecimento ({step.get('context', '')})")
+            label = fmt.get("generate_response", "  {i}. RESPOND using knowledge base ({context})").format(
+                i=i, context=step.get("context", "")
+            )
+            parts.append(label)
 
         elif action == "goto_flow":
-            parts.append(f"  {i}. SEGUIR roteiro: {step.get('flow', '')}")
+            label = fmt.get("follow_flow", "  {i}. FOLLOW flow: {flow}").format(i=i, flow=step.get("flow", ""))
+            parts.append(label)
 
         elif action == "escalate":
-            parts.append(f"  {i}. ENCAMINHAR para humano: {step.get('reason', '')}")
+            label = fmt.get("escalate", "  {i}. ESCALATE to human: {reason}").format(
+                i=i, reason=step.get("reason", "")
+            )
+            parts.append(label)
 
-    parts.append("\nIMPORTANTE: Use este roteiro como GUIA. Adapte a linguagem ao contexto.")
-    parts.append("Se o cliente perguntar algo fora do roteiro, use a base de conhecimento.")
+    parts.append(fmt.get("rules_header", "\nRULES:"))
+    parts.append(fmt.get("rule_literal", "- Messages marked (literal) must be copied EXACTLY."))
+    parts.append(fmt.get("rule_separate", "- Send messages as SEPARATE texts when there's more than one."))
+    parts.append(fmt.get("rule_generate", "- Only in 'generate_response' you can generate text freely."))
 
     return "\n".join(parts)
 
 
 def _parse_json_response(text: str) -> dict:
-    """Extrai JSON de resposta do LLM (pode ter texto antes/depois)."""
+    """Extract JSON from LLM response (may have text before/after)."""
     text = text.strip()
 
-    # Tentar parse direto
+    # Try direct parse
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # Tentar extrair JSON de dentro do texto
+    # Try extracting JSON from within the text
     import re
     match = re.search(r'\{[^{}]+\}', text)
     if match:
@@ -618,34 +1059,34 @@ def _parse_json_response(text: str) -> dict:
 # ==================== GRAPH ROUTING ====================
 
 def route_after_classify(state: AgentState) -> str:
-    """Decide rota após classificação."""
+    """Decide route after classification."""
     intent = state.get("intent", "")
 
-    if intent in ("feedback_positivo", "feedback_negativo"):
+    if intent in ("feedback_positive", "feedback_negative"):
         return "check_feedback"
-    elif intent == "humano":
+    elif intent == "human":
         return "generate_response"
-    elif intent == "fora_da_base":
+    elif intent == "out_of_scope":
         return "generate_response"
     else:
         return "retrieve"
 
 
 def route_after_feedback(state: AgentState) -> str:
-    """Decide rota após verificar feedback."""
+    """Decide route after feedback check."""
     if state.get("is_feedback"):
         return "generate_response"
-    # Não era feedback, seguir fluxo normal
+    # Not feedback, continue normal flow
     return "retrieve"
 
 
 # ==================== BUILD GRAPH ====================
 
 def build_graph() -> StateGraph:
-    """Constrói o grafo LangGraph."""
+    """Build the LangGraph graph."""
     graph = StateGraph(AgentState)
 
-    # Adicionar nós
+    # Add nodes
     graph.add_node("load_memory", load_memory)
     graph.add_node("classify_intent", classify_intent)
     graph.add_node("check_feedback", check_feedback)
@@ -653,13 +1094,13 @@ def build_graph() -> StateGraph:
     graph.add_node("generate_response", generate_response)
     graph.add_node("save_to_memory", save_to_memory)
 
-    # Definir entry point
+    # Set entry point
     graph.set_entry_point("load_memory")
 
     # Edges
     graph.add_edge("load_memory", "classify_intent")
 
-    # Conditional edge após classificação
+    # Conditional edge after classification
     graph.add_conditional_edges(
         "classify_intent",
         route_after_classify,
@@ -670,7 +1111,7 @@ def build_graph() -> StateGraph:
         }
     )
 
-    # Conditional edge após feedback check
+    # Conditional edge after feedback check
     graph.add_conditional_edges(
         "check_feedback",
         route_after_feedback,
@@ -680,7 +1121,7 @@ def build_graph() -> StateGraph:
         }
     )
 
-    # Edges lineares
+    # Linear edges
     graph.add_edge("retrieve", "generate_response")
     graph.add_edge("generate_response", "save_to_memory")
     graph.add_edge("save_to_memory", END)
@@ -688,12 +1129,12 @@ def build_graph() -> StateGraph:
     return graph
 
 
-# Compilar grafo
+# Compile graph
 _compiled_graph = None
 
 
 def get_graph():
-    """Retorna grafo compilado (singleton)."""
+    """Return compiled graph (singleton)."""
     global _compiled_graph
     if _compiled_graph is None:
         _compiled_graph = build_graph().compile()

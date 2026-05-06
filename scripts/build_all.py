@@ -110,8 +110,9 @@ def main():
     logger.info("=" * 60)
 
     from retrieval.chroma_index import index_knowledge_base
-    chroma_count = index_knowledge_base(kb_path, chroma_path, embed_model)
-    logger.info(f"→ {chroma_count} documentos no Chroma")
+    domain = os.getenv("BOT_DOMAIN", "android_box")
+    chroma_count = index_knowledge_base(kb_path, chroma_path, embed_model, domain=domain)
+    logger.info(f"→ {chroma_count} documentos no Chroma (domain={domain})")
 
     # ==================== STEP 7: INDEXAÇÃO BM25 ====================
     logger.info("=" * 60)
@@ -119,8 +120,8 @@ def main():
     logger.info("=" * 60)
 
     from retrieval.bm25_index import build_bm25_index
-    bm25_count = build_bm25_index(kb_path, data_dir)
-    logger.info(f"→ {bm25_count} documentos no BM25")
+    bm25_count = build_bm25_index(kb_path, data_dir, domain=domain)
+    logger.info(f"→ {bm25_count} documentos no BM25 (domain={domain})")
 
     # ==================== RESUMO ====================
     elapsed = time.time() - start
@@ -135,7 +136,7 @@ def main():
     logger.info(f"  KB complementar:      {domain_count} entradas (domínio)")
     logger.info(f"  Chroma docs:          {chroma_count}")
     logger.info(f"  BM25 docs:            {bm25_count}")
-    logger.info(f"  Domínio:              {os.getenv('BOT_DOMAIN', 'android_box')}")
+    logger.info(f"  Domínio:              {os.getenv('BOT_DOMAIN', 'custom')}")
     logger.info(f"  Tempo total:          {elapsed:.1f}s")
     logger.info("=" * 60)
 

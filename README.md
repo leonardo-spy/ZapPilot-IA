@@ -2,7 +2,7 @@
 
 Chatbot agentic de vendas e suporte técnico com RAG (Retrieval-Augmented Generation), construído a partir de conversas reais do WhatsApp.
 
-O sistema ingere exportações de chats do WhatsApp, extrai padrões de atendimento, constrói uma base de conhecimento via clustering semântico e responde perguntas de clientes usando busca híbrida (semântica + keywords) com LLM.
+O sistema ingere exportações de chats do WhatsApp, extrai padrões de atendimento, constrói uma base de conhecimento via clustering semântico e responde perguntas de clientes usando busca híbrida (semântica + keywords) com LLM. Suporta múltiplos domínios isolados, internacionalização (i18n) e detecção automática de lacunas no conhecimento.
 
 ---
 
@@ -14,11 +14,11 @@ Fonte de dados ───┼                                       ───→ I
                     └─ msgstore.db (SQLite decriptado)                                                         │
                                                                                                               ▼
                     Cliente ←─── LLM (Groq) ←─── Retriever Híbrido (65% semântico + 35% keyword)
-                       ↕              ↑
-                   Memória       LangGraph (Agentic Flow)
+                       ↕              ↑                         ↑
+                   Memória       LangGraph (Agentic Flow)   domain filter
                    (SQLite)     load_memory → classify → retrieve → generate
-                                                                       ↑
-                                                        ┌──────────────┴──────────────┐
+                     ↑                                                 ↑
+                  domain tag                            ┌──────────────┴──────────────┐
                                                         │     System Prompt Final     │
                                                         ├─────────────────────────────┤
                                                         │ 1. Persona (prompts.yaml)   │
@@ -33,21 +33,24 @@ Config (YAML):
   config/prompts.yaml              → templates de persona/regras
   config/settings.yaml             → thresholds e tuning
   config/playbooks/<domain>.yaml   → instruções do dono + mensagens + flows
+  config/locale/en_us.yaml         → locale base (LLM prompts, templates)
+  config/locale/pt_br.yaml         → override user-facing (erros, handoff)
 ```
 
 ### Stack
 
 | Componente | Tecnologia |
 | --- | --- |
-| LLM | Groq (llama-3.1-8b-instant) / llama.cpp local |
+| LLM | Groq (llama-3.1-8b-instant) / llama.cpp local (fallback) |
 | Embeddings (primário) | Google Gemini Embedding 2 (768 dims) |
 | Embeddings (fallback) | SentenceTransformers all-MiniLM-L6-v2 (384 dims) |
-| Busca semântica | ChromaDB |
-| Busca keyword | BM25 (rank-bm25) |
+| Busca semântica | ChromaDB (filtro por domain + category) |
+| Busca keyword | BM25 (rank-bm25, filtro por domain) |
 | Orquestração | LangGraph |
-| Memória | SQLite |
+| Memória | SQLite (com isolamento por domain) |
 | API | FastAPI |
 | Clustering | DBSCAN (scikit-learn) |
+| i18n | YAML locale com deep-merge fallback |
 
 ---
 
@@ -55,20 +58,25 @@ Config (YAML):
 
 ```text
 ZapPilot IA/
-├── app.py                      # FastAPI — endpoints /chat, /feedback, /health
+├── app.py                      # FastAPI — endpoints /chat, /feedback, /health, /admin/*
 ├── agent/
 │   ├── graph.py                # LangGraph agentic flow (classify → retrieve → generate)
 │   └── prompts.py              # System prompts (carrega domain config do YAML)
 ├── config/
-│   ├── __init__.py             # Loader centralizado (domínio, prompts, settings, playbooks)
+│   ├── __init__.py             # Loader centralizado (domínio, prompts, settings, locale, playbooks)
 │   ├── prompts.yaml            # Templates de system prompts (editável sem código)
 │   ├── settings.yaml           # Thresholds e parâmetros de tuning
 │   ├── domains/
-│   │   ├── android_box.yaml    # Config domínio: produtos, keywords, references, short_noise
-│   │   └── tirzepatida.yaml    # Config domínio Tirzepatida/Tirzec
+│   │   ├── android_box.yaml    # Config domínio: produtos, keywords, references
+│   │   ├── tirzepatida.yaml    # Config domínio Tirzepatida/Tirzec
+│   │   └── tizerdral.yaml      # Config domínio Tizerdral
+│   ├── locale/
+│   │   ├── en_us.yaml          # Locale base (TODAS as chaves — LLM prompts, templates)
+│   │   └── pt_br.yaml          # Override — apenas strings user-facing em português
 │   └── playbooks/
-│       ├── android_box.yaml    # Roteiros de conversa (flows, mensagens, instruções)
-│       └── tirzepatida.yaml    # Playbook Tirzepatida
+│       ├── android_box.yaml    # Roteiros de conversa Android Box
+│       ├── tirzepatida.yaml    # Playbook Tirzepatida
+│       └── tizerdral.yaml      # Playbook Tizerdral
 ├── ingestion/
 │   ├── whatsapp_loader.py      # Ingestão de JSON exportado + auto-detect fonte
 │   └── msgstore_loader.py      # Ingestão direta do msgstore.db decriptado (SQLite)
@@ -84,24 +92,28 @@ ZapPilot IA/
 │   ├── providers.py            # Interface LLM (Groq, llama.cpp local, fallback)
 │   └── embeddings.py           # Embedding providers (Google Gemini + SentenceTransformers)
 ├── retrieval/
-│   ├── chroma_index.py         # Indexação e busca ChromaDB
-│   ├── bm25_index.py           # Indexação e busca BM25
+│   ├── chroma_index.py         # Indexação e busca ChromaDB (domain-aware)
+│   ├── bm25_index.py           # Indexação e busca BM25 (domain-aware)
 │   └── hybrid_retriever.py     # Retriever híbrido com reranking ponderado
 ├── memory/
-│   └── sqlite_memory.py        # Memória persistente (histórico, fatos, casos, flow state)
+│   └── sqlite_memory.py        # Memória persistente (histórico, fatos, casos, flow state, knowledge gaps)
 ├── scripts/
 │   ├── build_all.py            # Pipeline completo de build (ingestão → indexação)
+│   ├── knowledge_gaps_report.py # Relatório de lacunas no conhecimento
+│   ├── test_classification.py  # Testes de classificação de intent
+│   ├── test_flow_conversations.py # Testes end-to-end de flows
 │   ├── review_kb.py            # Revisão manual da KB gerada
 │   └── test_chat.py            # CLI interativo para testar o chatbot
 ├── web/
 │   └── index.html              # Interface web de chat
+├── assets/                     # Imagens e mídia dos playbooks
 ├── input/
 │   ├── whatsapp_chats.json     # Dados brutos do WhatsApp em JSON (não versionado)
 │   └── msgstore.db             # Banco SQLite decriptado do WhatsApp (não versionado)
-├── data/                        # Artefatos gerados (KB, Chroma, BM25, memória)
+├── data/                       # Artefatos gerados (KB, Chroma, BM25, memória)
 ├── requirements.txt
 ├── .env.example
-└── .env                         # Variáveis de ambiente (não versionado)
+└── .env                        # Variáveis de ambiente (não versionado)
 ```
 
 ---
@@ -133,6 +145,7 @@ cp .env.example .env
 GROQ_API_KEY=gsk_your_key_here
 GROQ_MODEL=llama-3.1-8b-instant
 LOCAL_LLM_URL=http://127.0.0.1:8081/v1      # Opcional: llama.cpp local
+LOCAL_LLM_MODEL=prism-ml/Bonsai-8B-gguf:Q1_0
 
 # Embeddings
 GOOGLE_API_KEY=your_google_api_key
@@ -143,12 +156,13 @@ EMBEDDING_MODEL=all-MiniLM-L6-v2             # Fallback local
 # Rate limit (Google Embedding API)
 GOOGLE_EMBEDDING_WAIT_ON_LIMIT=true          # true=aguarda e retenta, false=fallback imediato
 GOOGLE_EMBEDDING_MAX_RETRIES=3               # Retries nos scripts (build, extract)
-GOOGLE_EMBEDDING_SERVER_MAX_RETRIES=10       # Retries no servidor (mais tolerante)
 GOOGLE_EMBEDDING_RPM=100                     # Free tier: 100 req/min
 
 # Domínio
-BOT_DOMAIN=android_box                       # android_box | tirzepatida | custom
-COLLECTION_NAME=android_box_suporte
+BOT_DOMAIN=tizerdral                         # android_box | tirzepatida | tizerdral
+
+# Locale (override de strings user-facing)
+BOT_LOCALE=pt_br                             # pt_br | en_us (default: pt_br)
 
 # Dados
 DATA_DIR=./data
@@ -210,8 +224,8 @@ O pipeline executa:
 3. **Turns** — Agrupa mensagens em pares pergunta/resposta semânticos
 4. **Knowledge Base** — Clusteriza problemas similares (DBSCAN) e extrai respostas canônicas
 5. **KB Complementar** — Gera entradas adicionais via LLM (opcional)
-6. **Indexação Chroma** — Indexa a KB para busca semântica
-7. **Indexação BM25** — Indexa para busca por keywords
+6. **Indexação Chroma** — Indexa a KB para busca semântica (com tag `domain`)
+7. **Indexação BM25** — Indexa para busca por keywords (com tag `domain`)
 
 ### 2. Usando msgstore.db diretamente (opcional)
 
@@ -253,7 +267,7 @@ python -m kb.extract_patterns approve         # Aprova para uso
 ### 5. Iniciar o Servidor
 
 ```bash
-uvicorn app:app --host 0.0.0.0 --port 8000
+uvicorn app:app --host 0.0.0.0 --port 8001
 ```
 
 ### 6. Testar via CLI
@@ -264,7 +278,7 @@ python scripts/test_chat.py
 
 ### 7. Interface Web
 
-Acesse `http://localhost:8000/web` após iniciar o servidor.
+Acesse `http://localhost:8001/web` após iniciar o servidor.
 
 ---
 
@@ -275,7 +289,7 @@ Acesse `http://localhost:8000/web` após iniciar o servidor.
 ```json
 {
   "customer_id": "5511999999999",
-  "message": "meu box está travando"
+  "message": "quanto custa a tirzepatida?"
 }
 ```
 
@@ -283,13 +297,16 @@ Resposta:
 
 ```json
 {
-  "response": "Vou te ajudar! Primeiro, tente reiniciar o box...",
-  "intent": "suporte",
-  "route": "rag",
+  "response": "A tirzepatida está por R$ 1.490,00...",
+  "response_parts": ["A tirzepatida está por R$ 1.490,00..."],
+  "intent": "sales",
+  "route": "playbook",
   "confidence": 0.92,
   "retrieved_docs": [...]
 }
 ```
+
+> **`response_parts`**: Quando o playbook envia mensagens múltiplas (separadas por `\n---MSG---\n`), cada item é uma mensagem individual para enviar ao WhatsApp sequencialmente.
 
 ### POST /feedback
 
@@ -304,6 +321,14 @@ Resposta:
 
 Retorna status do serviço.
 
+### GET /admin/knowledge-gaps?days=30&top=20&domain=tizerdral
+
+Retorna relatório de gaps de conhecimento (tópicos que a KB não cobre bem). Filtrado por domain.
+
+### GET /admin/knowledge-gaps/json?days=30&limit=100&domain=tizerdral
+
+Retorna dados brutos de knowledge gaps para uso programático.
+
 ---
 
 ## Fluxo Agentic (LangGraph)
@@ -312,24 +337,89 @@ Retorna status do serviço.
 load_memory → classify_intent → check_feedback ─┬─→ feedback_response
                                                  │
                                                  └─→ retrieve → generate_response → save_memory
-                                                                      ↑
-                                                              playbook context
-                                                     (instructions + flow + messages)
+                                                         ↑               ↑
+                                                   domain filter   playbook context
+                                                                (instructions + flow + messages)
 ```
 
-1. **load_memory** — Carrega histórico, fatos do cliente e **flow state** persistido (SQLite)
-2. **classify_intent** — LLM classifica intenção (venda, suporte, geral) + confiança
+1. **load_memory** — Carrega histórico (filtrado por domain ativo), fatos do cliente e **flow state** persistido
+2. **classify_intent** — LLM classifica intenção (`greeting`, `sales`, `info`, `support`, `billing`, `renewal`, `feedback_positive`, `feedback_negative`, `human`, `out_of_scope`) + confiança
 3. **check_feedback** — Detecta feedback via embeddings semânticos + LLM
-4. **retrieve** — Busca híbrida Chroma (65%) + BM25 (35%) com reranking
+4. **retrieve** — Busca híbrida Chroma (65%) + BM25 (35%) com reranking, **filtrada por domain ativo**
 5. **generate_response** — LLM gera resposta com: system prompt + playbook (instruções + roteiro ativo a partir do step atual) + RAG + memória
-6. **save_memory** — Persiste interação, atualiza contexto e **avança/pausa/limpa flow state**
+6. **save_memory** — Persiste interação (com tag domain), atualiza contexto, **avança/pausa/limpa flow state**, e detecta knowledge gaps
 
-O `generate_response` monta o prompt final combinando:
+### Keyword Precheck (Condition Evaluation)
 
-- System prompt (persona/regras do `config/prompts.yaml`)
-- Playbook instructions + flow ativo (selecionado por intent + estado do cliente)
-- Documentos recuperados (RAG)
-- Memória do cliente (histórico + fatos)
+Quando o playbook tem uma `condition` (ex: "já usou o produto?"), o sistema primeiro tenta responder via keywords sem chamar a LLM:
+
+- Palavras positivas (já, sim, usei, conheço, etc.) → `true`
+- Palavras negativas (não, nunca, nenhum, etc.) → `false`
+- Sem match → LLM avalia e responde `yes`/`no`
+
+Isso reduz chamadas à API e melhora a latência.
+
+### Knowledge Gap Detection
+
+Após cada interação, o sistema detecta quando faltou contexto para responder bem:
+
+| Condição | Gap detectado |
+| --- | --- |
+| Route = `no_context` (nenhum doc recuperado) | ✅ |
+| `needs_retrieval` mas 0 docs retornados | ✅ |
+| Confiança < 0.4 e ≤ 1 doc retornado | ✅ |
+| Route = `playbook` | ❌ (tem roteiro) |
+
+Gaps são gravados no SQLite com `domain` e analisáveis via `/admin/knowledge-gaps`.
+
+---
+
+## Isolamento por Domain (Multi-tenant)
+
+Todos os dados são isolados por `BOT_DOMAIN`:
+
+| Componente | Isolamento |
+| --- | --- |
+| **ChromaDB** | Metadata `domain` em cada doc — busca filtra por domain |
+| **BM25** | Index taggeado com domain — rejeita resultados cross-domain |
+| **Conversations** | Coluna `domain` — histórico filtrado por domain ativo |
+| **Knowledge Gaps** | Coluna `domain` — relatórios filtrados |
+| **Playbooks** | Arquivo `config/playbooks/<domain>.yaml` |
+| **Domain Config** | Arquivo `config/domains/<domain>.yaml` |
+
+Uma única instância do bot serve um domain por vez (`BOT_DOMAIN`). Para operar múltiplos domínios simultaneamente, rode instâncias separadas com `BOT_DOMAIN` diferente.
+
+A collection ChromaDB é compartilhada (nome padrão: `knowledge_base`), com separação feita via metadata filter. Isso permite que um mesmo Chroma DB sirva múltiplos domains sem conflito.
+
+---
+
+## Internacionalização (i18n)
+
+O sistema usa locale YAML com deep-merge:
+
+```text
+config/locale/
+├── en_us.yaml   ← BASE (todas as chaves definidas aqui)
+└── pt_br.yaml   ← OVERRIDE (apenas strings user-facing)
+```
+
+**Como funciona:**
+
+1. `en_us.yaml` é carregado como base (contém templates de LLM, instruções de flow, condition eval, etc.)
+2. O override regional (ex: `pt_br.yaml`) é deep-merged por cima
+3. Chaves não presentes no override caem automaticamente para en_us
+
+**Seções do locale:**
+
+| Seção | Propósito | Override em pt_br? |
+| --- | --- | --- |
+| `flow_format.*` | Templates de formatação de flows para o LLM | ❌ (inglês) |
+| `playbook_context.*` | Headers de contexto do playbook | ❌ (inglês) |
+| `condition_eval.*` | Instruções para avaliar condições (yes/no) | ❌ (inglês) |
+| `human_handoff.*` | Mensagem de encaminhamento p/ humano | ✅ (português) |
+| `errors.*` | Mensagens de erro (dificuldade técnica, etc.) | ✅ (português) |
+
+> **Por que inglês no LLM?** A LLM (llama-3.1-8b-instant) funciona melhor com instruções em inglês, mesmo processando conteúdo em português. As mensagens finais ao cliente saem em português via playbook.
 
 ---
 
@@ -368,55 +458,71 @@ Cada domínio é um arquivo YAML em `config/domains/` (padrão inspirado no [Qui
 | --- | --- | --- |
 | `android_box` | `config/domains/android_box.yaml` | Vendas e suporte de Android Box / IPTV |
 | `tirzepatida` | `config/domains/tirzepatida.yaml` | Vendas de Tirzepatida / Tirzec |
+| `tizerdral` | `config/domains/tizerdral.yaml` | Vendas de Tizerdral (tirzepatida) |
 
-Para criar um novo domínio, copie um YAML existente e ajuste os valores:
+Para criar um novo domínio:
 
 ```bash
-cp config/domains/android_box.yaml config/domains/meu_dominio.yaml
-# edite meu_dominio.yaml
-# no .env: BOT_DOMAIN=meu_dominio
+# 1. Criar configs
+cp config/domains/tizerdral.yaml config/domains/meu_dominio.yaml
+cp config/playbooks/tizerdral.yaml config/playbooks/meu_dominio.yaml
+
+# 2. Editar com dados do novo domínio
+# 3. Atualizar .env
+# BOT_DOMAIN=meu_dominio
+
+# 4. Rebuild da KB
+python scripts/build_all.py
 ```
 
-Cada YAML define: `name`, `products`, `keywords` (sale/support), `noise_terms`, `feedback` (positive/negative), `references` (embeddings de referência para classificação) e `short_noise`.
+Cada domínio YAML define: `name`, `description`, `products`, `keywords` (sale/support), `noise_terms`, `feedback` (positive/negative), `references` (embeddings de referência).
 
 ---
 
 ## Playbooks (Roteiros de Conversa)
 
-Além da configuração de domínio, cada domínio tem um **playbook** em `config/playbooks/<domain>.yaml` com roteiros modulares:
+Cada domínio tem um **playbook** em `config/playbooks/<domain>.yaml` com roteiros modulares:
 
 ```yaml
-# Seções de um playbook:
 instructions: |          # Texto livre do dono ("Eu vendo X, minhas regras são...")
   ...
 messages:               # Templates de mensagens reutilizáveis
-  boas_vindas_novo:
+  abertura:
     type: text
     content: "Olá! 👋 ..."
   tabela_precos:
-    type: text
-    content: "📋 Valores..."
-  tutorial_img:
     type: image
-    content: "assets/tutorial.jpg"
-    caption: "Como usar"
-flows:                  # Cenários modulares com steps
+    content: "assets/tizerdral/foto_preco.jpeg"
+    caption: "Valores atuais"
+flows:
   venda_cliente_novo:
+    name: "Venda - Cliente Novo"
     trigger:
-      intent: venda
+      intent: sales
       condition: client_is_new
+    priority: 10
     steps:
-      - action: send
-        message: boas_vindas_novo
+      - action: text
+        content: "Mensagem literal enviada ao cliente"
       - action: wait_response
       - action: condition
-        if: "asks_price"
-        then: ...
+        if: "already_used_similar_product"
+        keywords:
+          positive: [ja, sim, usei, conheço, ozempic]
+          negative: [não, nunca, nao, nenhum, primeiro]
+        then:
+          - action: text
+            content: "Mensagem se SIM"
+        else:
+          - action: text
+            content: "Mensagem se NÃO"
+      - action: generate_response
+        context: "preços e condições"
 ```
 
-**Actions disponíveis:** `send`, `send_sequence`, `wait_response`, `condition`, `goto_flow`, `generate_response`, `escalate`, `end`
+**Actions disponíveis:** `text`, `image`, `wait_response`, `condition`, `goto_flow`, `generate_response`, `escalate`, `end`
 
-O playbook é injetado no system prompt como contexto — a LLM usa como guia mas adapta ao contexto real.
+**Triggers por intent:** `sales`, `info`, `support`, `greeting`
 
 ### Flow State Persistente
 
@@ -424,12 +530,30 @@ O estado do flow é salvo entre turnos na memória do cliente (`customer_facts`)
 
 | Cenário | Comportamento |
 | --- | --- |
-| Cliente no meio de **venda** e pergunta **info** | Flow **pausa** — LLM responde info livremente, state mantido |
-| Cliente volta a falar de **venda** | Flow **retoma** do step onde parou |
+| Cliente no meio de **sales** e pergunta **info** | Flow **pausa** — LLM responde info livremente, state mantido |
+| Cliente volta a falar de **sales** | Flow **retoma** do step onde parou |
 | Cliente pede **suporte humano** ou dá **feedback** | Flow **abandonado** (state limpo) |
 | Flow chega ao último step | **Concluído** automaticamente |
 
 O prompt mostra apenas os steps restantes (a partir da posição atual), não o flow inteiro.
+
+---
+
+## Scripts de Teste
+
+```bash
+# Teste interativo via CLI
+python scripts/test_chat.py
+
+# Teste de classificação de intents
+python scripts/test_classification.py
+
+# Teste end-to-end de flows (cenários completos)
+python scripts/test_flow_conversations.py
+
+# Relatório de knowledge gaps
+python scripts/knowledge_gaps_report.py --days 30 --top 20 --domain tizerdral
+```
 
 ---
 

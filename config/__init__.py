@@ -16,6 +16,56 @@ _DOMAINS_DIR = _CONFIG_DIR / "domains"
 _cache: dict[str, dict[str, Any]] = {}
 _prompts_cache: dict[str, Any] | None = None
 _settings_cache: dict[str, Any] | None = None
+_locale_cache: dict[str, Any] | None = None
+
+
+# ==================== LOCALE ====================
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Deep merge override into base. Override values take precedence."""
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def get_locale(lang: str | None = None) -> dict[str, Any]:
+    """
+    Load locale with fallback: en_us (base) + regional override (e.g., pt_br).
+    Keys not present in the regional file fallback to en_us.
+    """
+    global _locale_cache
+    if _locale_cache is not None:
+        return _locale_cache
+
+    # Always load en_us as the base
+    base_path = _CONFIG_DIR / "locale" / "en_us.yaml"
+    base = {}
+    if base_path.exists():
+        with open(base_path, "r", encoding="utf-8") as f:
+            base = yaml.safe_load(f) or {}
+
+    # Load regional override
+    if lang is None:
+        lang = os.getenv("BOT_LOCALE", "pt_br")
+
+    if lang == "en_us":
+        _locale_cache = base
+        return _locale_cache
+
+    override_path = _CONFIG_DIR / "locale" / f"{lang}.yaml"
+    if override_path.exists():
+        with open(override_path, "r", encoding="utf-8") as f:
+            override = yaml.safe_load(f) or {}
+        _locale_cache = _deep_merge(base, override)
+    else:
+        _locale_cache = base
+
+    return _locale_cache
 
 
 # ==================== DOMAIN CONFIG ====================
@@ -35,7 +85,7 @@ def load_domain_config(domain: str | None = None) -> dict[str, Any]:
         FileNotFoundError: Se o arquivo YAML do domínio não existir.
     """
     if domain is None:
-        domain = os.getenv("BOT_DOMAIN", "android_box")
+        domain = os.getenv("BOT_DOMAIN", "custom")
 
     if domain in _cache:
         return _cache[domain]
@@ -150,7 +200,7 @@ def load_playbook(domain: str | None = None) -> dict[str, Any]:
         Dict com: instructions, messages, flows
     """
     if domain is None:
-        domain = os.getenv("BOT_DOMAIN", "android_box")
+        domain = os.getenv("BOT_DOMAIN", "custom")
 
     if domain in _playbook_cache:
         return _playbook_cache[domain]
@@ -185,6 +235,12 @@ def get_playbook_flows(domain: str | None = None) -> dict[str, dict]:
     """Retorna dict de flows do playbook."""
     playbook = load_playbook(domain)
     return playbook.get("flows", {})
+
+
+def get_playbook_condition_hints(domain: str | None = None) -> dict[str, dict]:
+    """Returns condition_hints from playbook (keywords + eval descriptions)."""
+    playbook = load_playbook(domain)
+    return playbook.get("condition_hints", {})
 
 
 def get_flow_by_trigger(

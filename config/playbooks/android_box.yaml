@@ -170,7 +170,7 @@ flows:
   venda_cliente_novo:
     description: "Cliente que nunca interagiu antes — apresentar produto"
     trigger:
-      intent: venda
+      intent: sales
       condition: client_is_new  # sem histórico na memória
     priority: 10
     steps:
@@ -215,7 +215,7 @@ flows:
   venda_cliente_retorno:
     description: "Cliente que já interagiu — ser mais direto"
     trigger:
-      intent: venda
+      intent: sales
       condition: client_has_history
     priority: 20
     steps:
@@ -239,7 +239,7 @@ flows:
   venda_grupo:
     description: "Cliente que veio de grupo — já viu oferta, quer detalhes"
     trigger:
-      intent: venda
+      intent: sales
       condition: source_is_group
     priority: 15
     steps:
@@ -261,7 +261,7 @@ flows:
   fechamento_venda:
     description: "Cliente decidiu comprar — fechar"
     trigger:
-      intent: venda
+      intent: sales
       condition: client_wants_to_buy
     priority: 50
     steps:
@@ -283,7 +283,7 @@ flows:
   pos_informacao:
     description: "Após enviar info, se aceitar, enviar sequência explicativa"
     trigger:
-      intent: venda
+      intent: sales
       condition: client_accepted_info
     priority: 30
     steps:
@@ -346,7 +346,7 @@ flows:
   suporte_pos_venda:
     description: "Cliente já comprou e precisa de ajuda"
     trigger:
-      intent: suporte
+      intent: support
       condition: client_is_buyer
     priority: 40
     steps:

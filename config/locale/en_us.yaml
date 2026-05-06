@@ -1,0 +1,59 @@
+# ============================================================================
+# LOCALE — English (US) — PRIMARY / BASE
+# ============================================================================
+# This is the default locale. All keys must be defined here.
+# Other locale files (e.g., pt_br.yaml) only override user-facing strings.
+# Keys not overridden in a regional locale will fallback to these values.
+# ============================================================================
+
+language: en_us
+
+# --- Flow formatting templates (injected into LLM system prompt) ---
+flow_format:
+  active_flow_header: "--- Active flow: {description} ---"
+  continuation: "(Continuation — step {step} of {total})"
+  literal_instruction: "IMPORTANT: Use the pre-programmed messages EXACTLY as written below. Do NOT modify, do NOT paraphrase, do NOT summarize. Copy the text literally."
+  send_literal: "  {i}. SEND (literal):"
+  send_sequence: "  {i}. SEND SEQUENCE (each as separate message):"
+  wait_response: "  {i}. WAIT for client response"
+  evaluate_condition: "  {i}. EVALUATE client message — IF {condition}:"
+  then_label: "     THEN:"
+  else_label: "     ELSE:"
+  send_in_branch: "       SEND (literal):"
+  goto_flow_branch: "       → follow flow: {flow}"
+  generate_response: "  {i}. RESPOND using knowledge base ({context})"
+  follow_flow: "  {i}. FOLLOW flow: {flow}"
+  escalate: "  {i}. ESCALATE to human: {reason}"
+  rules_header: "\nRULES:"
+  rule_literal: "- Messages marked (literal) must be copied EXACTLY, no changes."
+  rule_separate: "- Send messages as SEPARATE texts when there is more than one."
+  rule_generate: "- Only in 'generate_response' you may generate text freely."
+
+# --- Playbook context templates ---
+playbook_context:
+  instructions_header: "--- Service instructions ---"
+  flow_paused_note: "--- Note: there is a {intent} flow in progress with this client. If they return to the topic, resume where you left off. ---"
+
+# --- Condition evaluation templates ---
+condition_eval:
+  system_prompt: "You evaluate conditions about client messages. Answer only 'yes' or 'no'. No explanation. Be STRICT: only 'yes' if the message CLEARLY indicates the condition. When in doubt, 'no'."
+  eval_intro: |
+    Evaluate whether the condition below is TRUE based on the client's message.
+    Be PRECISE — only answer 'yes' if the message CLEARLY indicates the condition.
+    When in doubt, answer 'no'.
+  condition_label: "Condition: {condition}"
+  message_label: "Client message: \"{message}\""
+  hints_header: "Interpretation guide (be strict):"
+  important_prefix: "IMPORTANT: "
+  response_instruction: "Answer ONLY 'yes' or 'no' (no explanation)."
+  positive_answer: "yes"
+  negative_answer: "no"
+
+# --- Human handoff ---
+human_handoff:
+  response: "I'll forward you to human support to better check your case. An agent will be in touch shortly."
+
+# --- Error/fallback responses ---
+errors:
+  technical_difficulty: "Sorry, I'm experiencing a technical difficulty. I'll forward you to human support."
+  low_confidence_suffix: "\n\n_If you need more information, I can forward you to an agent._"

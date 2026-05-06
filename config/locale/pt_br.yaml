@@ -1,0 +1,18 @@
+# ============================================================================
+# LOCALE — Português (Brasil) — OVERRIDE
+# ============================================================================
+# Only user-facing strings that must appear in Portuguese go here.
+# All other keys fallback to en_us.yaml (the primary/base locale).
+# ============================================================================
+
+language: pt_br
+
+# --- Human handoff (shown directly to user) ---
+human_handoff:
+  response: "Vou encaminhar para suporte humano para verificar melhor seu caso. Um atendente entrará em contato em breve."
+
+# --- Error/fallback responses (shown directly to user) ---
+errors:
+  technical_difficulty: "Desculpe, estou com dificuldade técnica. Vou encaminhar para suporte humano."
+  low_confidence_suffix: "\n\n_Se precisar de mais informações, posso encaminhar para um atendente._"
+

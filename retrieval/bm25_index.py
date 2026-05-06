@@ -4,6 +4,7 @@ Complementa a busca semântica do Chroma com matching exato de termos.
 """
 import json
 import logging
+import os
 import pickle
 from pathlib import Path
 from rank_bm25 import BM25Okapi
@@ -24,16 +25,21 @@ def _tokenize(text: str) -> list[str]:
 def build_bm25_index(
     kb_path: str = "./data/knowledge_base.json",
     output_dir: str = "./data",
+    domain: str = None,
 ) -> int:
     """
     Constrói índice BM25 a partir da knowledge base.
+    Tags each document with domain for multi-domain filtering.
 
     Salva o índice em pickle para não precisar recalcular.
 
     Returns:
         Número de documentos indexados
     """
-    logger.info(f"Construindo índice BM25 a partir de: {kb_path}")
+    if domain is None:
+        domain = os.getenv("BOT_DOMAIN", "custom")
+
+    logger.info(f"Construindo índice BM25 a partir de: {kb_path} (domain={domain})")
 
     with open(kb_path, encoding="utf-8") as f:
         kb = json.load(f)
@@ -79,6 +85,7 @@ def build_bm25_index(
         "doc_ids": doc_ids,
         "kb": kb,
         "tokenized_corpus": tokenized_corpus,
+        "domain": domain,
     }
 
     output_path = Path(output_dir) / INDEX_FILENAME
@@ -108,18 +115,28 @@ def bm25_search(
     query: str,
     top_k: int = 5,
     data_dir: str = "./data",
+    domain: str = None,
 ) -> list[dict]:
     """
-    Busca por keywords usando BM25.
+    Busca por keywords usando BM25, filtrada por domain.
 
     Returns:
         Lista de resultados com kb_id, content, metadata, keyword_score
     """
+    if domain is None:
+        domain = os.getenv("BOT_DOMAIN", "custom")
+
     index_data = load_bm25_index(data_dir)
     bm25 = index_data["bm25"]
     documents = index_data["documents"]
     doc_ids = index_data["doc_ids"]
     kb = index_data["kb"]
+    index_domain = index_data.get("domain")
+
+    # If the index was built for a different domain, skip (no cross-domain results)
+    if index_domain and index_domain != domain:
+        logger.debug(f"BM25 index domain '{index_domain}' != requested '{domain}', returning empty")
+        return []
 
     # Tokenizar query
     query_tokens = _tokenize(query)

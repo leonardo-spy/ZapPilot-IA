@@ -249,7 +249,7 @@ Gere o seguinte JSON (todos os campos obrigatórios):
   }},
   "kb_entries": [
     {{
-      "category": "suporte",
+      "category": "support",
       "intent": "identificador_sem_espacos",
       "title": "Título do problema comum",
       "symptoms": ["sintoma 1", "sintoma 2", "sintoma 3"],

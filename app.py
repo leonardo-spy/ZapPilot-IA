@@ -70,6 +70,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
+    response_parts: list[str] = []
     intent: str
     route: str
     confidence: float
@@ -98,8 +99,16 @@ async def chat(request: ChatRequest):
 
     result = run_agent(request.customer_id, request.message)
 
+    # Separar mensagens múltiplas (playbook envia com separador)
+    raw_response = result["response"]
+    if "\n---MSG---\n" in raw_response:
+        parts = [p.strip() for p in raw_response.split("\n---MSG---\n") if p.strip()]
+    else:
+        parts = [raw_response]
+
     return ChatResponse(
-        response=result["response"],
+        response=raw_response.replace("\n---MSG---\n", "\n\n"),
+        response_parts=parts,
         intent=result["intent"],
         route=result["route"],
         confidence=result["confidence"],
@@ -130,4 +139,39 @@ async def health():
         "status": "ok",
         "service": "ZapPilot IA",
         "version": "1.0.0",
+    }
+
+
+# ==================== ADMIN ENDPOINTS ====================
+
+@app.get("/admin/knowledge-gaps")
+async def knowledge_gaps(days: int = 30, top: int = 20, domain: str = None):
+    """Returns knowledge gap analysis — what info the KB is missing. Filtered by domain."""
+    import os
+    from scripts.knowledge_gaps_report import generate_report
+
+    if domain is None:
+        domain = os.getenv("BOT_DOMAIN", "android_box")
+
+    report = generate_report(days=days, top_n=top, domain=domain)
+    return {"report": report, "domain": domain}
+
+
+@app.get("/admin/knowledge-gaps/json")
+async def knowledge_gaps_json(days: int = 30, limit: int = 100, domain: str = None):
+    """Returns raw knowledge gaps data as JSON, filtered by domain."""
+    import os
+    from memory.sqlite_memory import SQLiteMemory
+
+    if domain is None:
+        domain = os.getenv("BOT_DOMAIN", "android_box")
+
+    memory = SQLiteMemory(os.getenv("DATA_DIR", "./data") + "/memory.db")
+    gaps = memory.get_knowledge_gaps(limit=limit, since_days=days, domain=domain)
+    summary = memory.get_knowledge_gaps_summary(since_days=days, domain=domain)
+
+    return {
+        "domain": domain,
+        "summary": summary,
+        "gaps": gaps,
     }

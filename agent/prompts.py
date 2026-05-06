@@ -39,16 +39,16 @@ def _build_base_system_prompt() -> str:
     return _render_prompt("base_system_prompt")
 
 
-def _get_vendas_prompt() -> str:
-    return _build_base_system_prompt() + "\n" + _render_prompt("vendas_prompt")
+def _get_sales_prompt() -> str:
+    return _build_base_system_prompt() + "\n" + _render_prompt("sales_prompt")
 
 
-def _get_suporte_prompt() -> str:
-    return _build_base_system_prompt() + "\n" + _render_prompt("suporte_prompt")
+def _get_support_prompt() -> str:
+    return _build_base_system_prompt() + "\n" + _render_prompt("support_prompt")
 
 
-def _get_geral_prompt() -> str:
-    return _build_base_system_prompt() + "\n" + _render_prompt("geral_prompt")
+def _get_general_prompt() -> str:
+    return _build_base_system_prompt() + "\n" + _render_prompt("general_prompt")
 
 
 # ==================== INTENT CLASSIFICATION ====================
@@ -91,13 +91,13 @@ def get_domain_kb_generation_prompt(quantity: int = 10) -> str:
 def get_system_prompt(intent: str) -> str:
     """Retorna system prompt adequado para a intenção."""
     from config import get_setting
-    vendas_intents = get_setting("classification", "vendas_intents", ["venda", "renovacao", "cobranca"])
-    if intent in vendas_intents:
-        return _get_vendas_prompt()
-    elif intent == "suporte":
-        return _get_suporte_prompt()
+    sales_intents = get_setting("classification", "sales_intents", ["sales", "renewal", "billing"])
+    if intent in sales_intents:
+        return _get_sales_prompt()
+    elif intent == "support":
+        return _get_support_prompt()
     else:
-        return _get_geral_prompt()
+        return _get_general_prompt()
 
 
 def build_rag_prompt(system_prompt: str, context: str, memory_context: str = "") -> str:

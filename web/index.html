@@ -119,7 +119,17 @@
         function addMessage(text, role, meta = '') {
             const div = document.createElement('div');
             div.className = `message ${role}`;
-            div.innerHTML = text.replace(/\n/g, '<br>');
+
+            // Detectar imagens: [IMAGEM: caption]\npath
+            const imgMatch = text.match(/^\[IMAGEM:\s*(.+?)\]\n(.+)$/s);
+            if (imgMatch) {
+                const caption = imgMatch[1];
+                const src = imgMatch[2].trim();
+                div.innerHTML = `<img src="/${src}" alt="${caption}" style="max-width:100%;border-radius:8px;margin-bottom:4px;"><br><small>${caption}</small>`;
+            } else {
+                div.innerHTML = text.replace(/\n/g, '<br>');
+            }
+
             if (meta) {
                 div.innerHTML += `<div class="meta">${meta}</div>`;
             }
@@ -153,7 +163,12 @@
                 chatEl.removeChild(typing);
 
                 const meta = `${data.intent} | ${data.route} | conf: ${(data.confidence * 100).toFixed(0)}%`;
-                addMessage(data.response, 'bot', meta);
+                const parts = data.response_parts && data.response_parts.length > 0
+                    ? data.response_parts
+                    : [data.response];
+                parts.forEach((part, idx) => {
+                    addMessage(part, 'bot', idx === 0 ? meta : '');
+                });
             } catch (err) {
                 chatEl.removeChild(typing);
                 addMessage('Erro ao conectar com o servidor.', 'bot');

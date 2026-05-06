@@ -190,9 +190,9 @@ def _categorize(problems: list[str], response: str) -> str:
     support_score = sum(1 for kw in support_keywords if kw in text)
 
     if sale_score > support_score:
-        return "venda"
+        return "sales"
     elif support_score > sale_score:
-        return "suporte"
+        return "support"
     return "info"
 
 

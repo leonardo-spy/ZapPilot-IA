@@ -151,7 +151,7 @@ flows:
   venda_cliente_novo:
     description: "Primeira interação — explicar produto completo"
     trigger:
-      intent: venda
+      intent: sales
       condition: client_is_new
     priority: 10
     steps:
@@ -183,7 +183,7 @@ flows:
   venda_cliente_retorno:
     description: "Cliente que já conversou — ser direto"
     trigger:
-      intent: venda
+      intent: sales
       condition: client_has_history
     priority: 20
     steps:
@@ -207,7 +207,7 @@ flows:
   fechamento_venda:
     description: "Cliente quer comprar — fechar pedido"
     trigger:
-      intent: venda
+      intent: sales
       condition: client_wants_to_buy
     priority: 50
     steps:
@@ -302,7 +302,7 @@ flows:
   suporte_aplicacao:
     description: "Dúvida sobre como aplicar/conservar"
     trigger:
-      intent: suporte
+      intent: support
       condition: topic_is_application
     priority: 35
     steps:

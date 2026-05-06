@@ -1,0 +1,529 @@
+# ============================================================================
+# PLAYBOOK — Tizerdral 15mg
+# ============================================================================
+# Roteiros de conversa para venda de Tizerdral (tirzepatida 15mg).
+# Produto: ampola 0,5ml (R$500) e caixa 2ml/4 ampolas (R$1.800).
+# Entrega local em SJC + envio para outras regiões.
+# ============================================================================
+
+instructions: |
+  Vendo Tizerdral 15mg (tirzepatida) para emagrecimento.
+  Tenho ampola avulsa (0,5ml - R$500) e caixa (2ml = 4 ampolas - R$1.800).
+  
+  Regras do meu atendimento:
+  - Sempre perguntar se o cliente já usa (Ozempic/Mounjaro) ou é primeira vez
+  - Se já usa: ser direto, focar no preço e vantagem da caixa
+  - Se é iniciante: explicar o produto, mostrar fotos, explicar aplicação
+  - Sempre enviar fotos de explicação (seringa, frasco) depois da mensagem 2
+  - Empurrar a caixa como melhor custo-benefício
+  - Se perguntar sobre TG: não trabalho com TG, só Tizerdral (mesmo princípio ativo)
+  - Se perguntar sobre Tirzec: acabou, só tenho Tizerdral (mesmo princípio ativo)
+  - Sempre mencionar que já usei TG, Tirzec e agora uso Tizerdral (gera confiança)
+  - Se o cliente hesitar ("vou pensar", "vou falar pro marido"), mencionar Anvisa e escassez
+  - Se a conversa não avança, enviar fotos da caixa e ampolas (gera confiança)
+  - Entrega presencial em SJC com explicação de como aplicar
+  - Nunca dar orientação médica direta
+  - Uma caixa dura cerca de 4 a 6 meses
+
+messages:
+  # --- MENSAGEM 1: Abertura ---
+  abertura:
+    type: text
+    content: |
+      Opa! Tudo bem? 😊
+      Vi que você chamou sobre a tirzepatida.
+
+      Me fala uma coisa rapidinho pra eu te orientar melhor:
+      👉 Você já utiliza (tipo Ozempic / Mounjaro) ou seria a primeira vez?
+
+  # --- MENSAGEM 2: Respostas ---
+  resposta_experiente:
+    type: text
+    content: |
+      Perfeito, então você já conhece o efeito 👍
+
+      Hoje estou com a Tizerdral 15mg, que é tirzepatida também (mesmo princípio ativo) — só muda o fabricante.
+
+      E está saindo bem mais em conta:
+
+      💉 Ampola 0,5ml: R$ 500
+      📦 Caixa (2ml): R$ 1.800 (equivale a 4 ampolas)
+
+      A maioria pega a caixa porque compensa bem mais.
+
+      Quer que eu te indique a melhor opção pro seu uso?
+
+  resposta_iniciante:
+    type: text
+    content: |
+      Boa, então vou te explicar bem direto 👍
+
+      A tirzepatida é hoje um dos tratamentos mais fortes pra perda de peso.
+
+      Aqui estou com a Tizerdral 15mg, que é justamente tirzepatida (mesmo princípio ativo).
+
+      💉 Ampola 0,5ml: R$ 500
+      📦 Caixa (2ml): R$ 1.800 (melhor custo-benefício)
+
+      Se quiser, te explico como funciona o uso certinho 👌
+
+  # --- Sequência de explicação (após mensagem 2) ---
+  foto_seringa:
+    type: image
+    content: "assets/tizerdral/foto_medida_Sering.jpg"
+    caption: "Medida da seringa"
+
+  foto_frasco:
+    type: image
+    content: "assets/tizerdral/foto_frasco.jpg"
+    caption: "Frasco Tizerdral"
+
+  explicacao_entrega:
+    type: text
+    content: "Levamos o produto até sua residência (se for em SJC) e explicaremos como aplicar as doses"
+
+  explicacao_concentracao:
+    type: text
+    content: "Elas são de 15mg por concentração a cada 0,5 ml, uma ampola é 0,5 ml e a caixa vem 4 ampolas"
+
+  explicacao_duracao:
+    type: text
+    content: "Uma caixa dá cerca de 4 a 6 meses"
+
+  # --- Pagamento ---
+  formas_pagamento:
+    type: text
+    content: |
+      Formas de pagamento 💳
+      Aceitamos Pix e cartão de crédito.
+
+      💉 Ampola (0,5ml) (Pix 500)
+      1x R$ 516,27
+      2x R$ 528,49 (2x de R$ 264,25)
+      3x R$ 532,60 (3x de R$ 177,53)
+      4x R$ 536,77 (4x de R$ 134,19)
+      5x R$ 540,95 (5x de R$ 108,19)
+
+      📦 Caixa (2ml) (Pix 1800)
+      1x R$ 1.858,55
+      2x R$ 1.902,55 (2x de R$ 951,27)
+      3x R$ 1.917,35 (3x de R$ 639,12)
+      4x R$ 1.932,37 (4x de R$ 483,09)
+      5x R$ 1.947,48 (5x de R$ 389,48)
+
+  # --- MENSAGEM 3: Fechamento ---
+  fechamento:
+    type: text
+    content: |
+      Te falo bem sincero: a maioria pega a caixa porque sai mais barato no final.
+
+      👉 Quer que eu já separe uma pra você ou prefere começar só com 1 ampola?
+
+  # --- TG / Tirzec ---
+  nao_tenho_tg:
+    type: text
+    content: "Não estou trabalhando com a TG, somente a Tizerdral, mas ambas tem o mesmo princípio ativo do Mounjaro!"
+
+  nao_tenho_tirzec:
+    type: text
+    content: "As minhas Tirzec acabou! Mas é a mesma coisa de TG, Tirzec, etc... Tenho a Tizerdral, ambas tem o mesmo princípio ativo do Mounjaro!"
+
+  ja_usei_todas:
+    type: text
+    content: "Eu já utilizei TG, Tirzec e agora estou usando a Tizerdral"
+
+  # --- Hesitação / Confiança ---
+  anvisa_escassez:
+    type: text
+    content: "Tudo bem, a Anvisa está barrando todas então é natural que fique escasso pela fiscalização, mas se precisar estou à disposição"
+
+  foto_caixa:
+    type: image
+    content: "assets/tizerdral/foto_caixa_tizerdral.jpg"
+    caption: "Caixa Tizerdral"
+
+  foto_ampolas:
+    type: image
+    content: "assets/tizerdral/foto_4_ampolas_tizerdral.jpg"
+    caption: "4 ampolas Tizerdral"
+
+  # --- Reativação ---
+  reativacao:
+    type: text
+    content: |
+      Oi! Tudo bem? 😊
+
+      Te chamei porque muita gente que tinha visto antes acabou voltando agora.
+
+      Antes eu estava só com valores mais altos, mas agora consegui uma opção mais acessível:
+
+      💉 Ampola 0,5ml: R$ 500 (ótima pra começar)
+      📦 Caixa 2ml: R$ 1.800 (melhor custo-benefício)
+
+      E agora estou trabalhando com a Tizerdral 15mg, que é tirzepatida também (mesmo princípio ativo).
+
+      Se ainda tiver interesse, esse formato menor facilitou bastante pra quem estava em dúvida antes.
+
+      Quer que eu te explique rapidinho como funciona no seu caso?
+
+  # --- Dica avançada ---
+  dica_avancada:
+    type: text
+    content: "Conseguiu ver? Te pergunto porque essa ampola menor está saindo bastante 👀"
+    tags: [tip, urgency, scarcity]
+
+
+flows:
+  # ---- FLOW PRINCIPAL: Venda ----
+  venda_cliente_novo:
+    description: "Cliente chamou — perguntar se já usa ou é iniciante, explicar produto"
+    trigger:
+      intent: sales
+      condition: client_is_new
+    priority: 10
+    steps:
+      - action: send
+        message: abertura
+
+      - action: wait_response
+
+      # Diferenciar experiente vs iniciante
+      - action: condition
+        if: "client_already_uses_similar_product"
+        then:
+          - action: send
+            message: resposta_experiente
+        else:
+          - action: send
+            message: resposta_iniciante
+
+      - action: wait_response
+
+      # Sequência de explicação (fotos + textos)
+      - action: send_sequence
+        messages:
+          - foto_seringa
+          - foto_frasco
+          - explicacao_entrega
+          - explicacao_concentracao
+          - explicacao_duracao
+        delay_between: "2s"
+
+      - action: wait_response
+
+      # Reagir à resposta do cliente
+      - action: condition
+        if: "asks_payment_method"
+        then:
+          - action: send
+            message: formas_pagamento
+          - action: wait_response
+          - action: goto_flow
+            flow: fechamento_venda
+        else:
+          - action: condition
+            if: "asks_about_tg"
+            then:
+              - action: send
+                message: nao_tenho_tg
+              - action: send
+                message: ja_usei_todas
+            else:
+              - action: condition
+                if: "asks_about_tirzec"
+                then:
+                  - action: send
+                    message: nao_tenho_tirzec
+                  - action: send
+                    message: ja_usei_todas
+                else:
+                  - action: generate_response
+                    context: "responder dúvida do cliente sobre Tizerdral usando RAG"
+
+      - action: wait_response
+
+      - action: goto_flow
+        flow: fechamento_venda
+
+  venda_cliente_retorno:
+    description: "Cliente que já conversou — ser mais direto"
+    trigger:
+      intent: sales
+      condition: client_has_history
+    priority: 20
+    steps:
+      - action: send
+        message: abertura
+
+      - action: wait_response
+
+      - action: condition
+        if: "client_already_uses_similar_product"
+        then:
+          - action: send
+            message: resposta_experiente
+        else:
+          - action: send
+            message: resposta_iniciante
+
+      - action: wait_response
+
+      - action: condition
+        if: "asks_payment_method"
+        then:
+          - action: send
+            message: formas_pagamento
+        else:
+          - action: generate_response
+            context: "atender dúvida do cliente retorno sobre Tizerdral"
+
+      - action: wait_response
+
+      - action: goto_flow
+        flow: fechamento_venda
+
+  fechamento_venda:
+    description: "Empurrar fechamento — caixa vs ampola"
+    trigger:
+      intent: sales
+      condition: client_wants_to_buy
+    priority: 50
+    steps:
+      - action: send
+        message: fechamento
+
+      - action: wait_response
+
+      - action: condition
+        if: "client_accepts_or_chooses"
+        then:
+          - action: send
+            message: formas_pagamento
+        else:
+          - action: condition
+            if: "client_hesitates"
+            then:
+              - action: send
+                message: anvisa_escassez
+            else:
+              - action: generate_response
+                context: "fechar venda de Tizerdral, tirar dúvida final"
+
+  # ---- FLOW: Cliente menciona TG ----
+  pergunta_tg:
+    description: "Cliente pergunta sobre TG — redirecionar para Tizerdral"
+    trigger:
+      intent: info
+      condition: asks_about_tg
+    priority: 30
+    steps:
+      - action: send
+        message: nao_tenho_tg
+
+      - action: send
+        message: ja_usei_todas
+
+      - action: send_sequence
+        messages:
+          - foto_caixa
+          - foto_ampolas
+        delay_between: "2s"
+
+      - action: wait_response
+
+      - action: generate_response
+        context: "continuar conversa sobre Tizerdral após explicar que não tem TG"
+
+  # ---- FLOW: Cliente menciona Tirzec ----
+  pergunta_tirzec:
+    description: "Cliente pergunta sobre Tirzec — redirecionar para Tizerdral"
+    trigger:
+      intent: info
+      condition: asks_about_tirzec
+    priority: 30
+    steps:
+      - action: send
+        message: nao_tenho_tirzec
+
+      - action: send
+        message: ja_usei_todas
+
+      - action: send_sequence
+        messages:
+          - foto_caixa
+          - foto_ampolas
+        delay_between: "2s"
+
+      - action: wait_response
+
+      - action: generate_response
+        context: "continuar conversa sobre Tizerdral após explicar que não tem Tirzec"
+
+  # ---- FLOW: Cliente hesita / sem confiança ----
+  confianca:
+    description: "Cliente inseguro — enviar fotos reais para gerar confiança"
+    trigger:
+      condition: client_lacks_confidence
+    priority: 25
+    steps:
+      - action: send_sequence
+        messages:
+          - foto_caixa
+          - foto_ampolas
+        delay_between: "2s"
+
+      - action: wait_response
+
+      - action: condition
+        if: "shows_interest"
+        then:
+          - action: goto_flow
+            flow: fechamento_venda
+        else:
+          - action: send
+            message: anvisa_escassez
+
+  # ---- FLOW: Reativação ----
+  reativacao:
+    description: "Follow-up após inatividade"
+    trigger:
+      condition: client_inactive_days >= 5
+    priority: 5
+    steps:
+      - action: send
+        message: reativacao
+
+      - action: wait_response
+        timeout: "48h"
+
+      - action: condition
+        if: "shows_interest"
+        then:
+          - action: goto_flow
+            flow: venda_cliente_retorno
+        else:
+          - action: send
+            message: dica_avancada
+          - action: wait_response
+          - action: condition
+            if: "shows_interest"
+            then:
+              - action: goto_flow
+                flow: venda_cliente_retorno
+            else:
+              - action: end
+                reason: "Cliente não respondeu"
+
+  # ---- FLOW: Dica avançada (gatilho manual) ----
+  dica_avancada:
+    description: "Gatilho de escassez — ampola menor saindo bastante"
+    trigger:
+      condition: manual
+    priority: 1
+    steps:
+      - action: send
+        message: dica_avancada
+
+      - action: wait_response
+
+      - action: condition
+        if: "shows_interest"
+        then:
+          - action: goto_flow
+            flow: venda_cliente_retorno
+
+
+# ============================================================================
+# CONDITION HINTS — Keywords + evaluation guides for condition steps
+# ============================================================================
+# Used by the agent to resolve conditions without LLM (keyword match)
+# and to guide LLM evaluation when keywords don't match.
+# ============================================================================
+
+condition_hints:
+  client_already_uses_similar_product:
+    description: "sim se diz que já usou, já usa, já utilizou, ou menciona qualquer produto similar. 'Já utilizei' ou 'já usei' = sim. Contexto: estamos vendendo tirzepatida"
+    keywords_true:
+      - "ja utilizei"
+      - "já utilizei"
+      - "ja usei"
+      - "já usei"
+      - "ja uso"
+      - "já uso"
+      - "ja tomei"
+      - "já tomei"
+      - "ja apliquei"
+      - "já apliquei"
+      - "ja fiz uso"
+      - "já fiz uso"
+      - "ozempic"
+      - "mounjaro"
+      - "tirzepatida"
+      - "semaglutida"
+      - "wegovy"
+      - "saxenda"
+      - "victoza"
+      - "tg"
+      - "tirzec"
+      - "tizerc"
+
+  asks_payment_method:
+    description: "sim APENAS se pergunta explicitamente sobre pagamento, pix, cartão, parcela, valor, preço. NÃO é sobre entrega, horário ou disponibilidade"
+    keywords_true:
+      - "forma de pagamento"
+      - "formas de pagamento"
+      - "aceita pix"
+      - "aceita cartao"
+      - "aceita cartão"
+      - "parcela"
+      - "parcelar"
+      - "quanto custa"
+      - "qual o valor"
+      - "qual valor"
+      - "qual o preco"
+      - "qual o preço"
+      - "quanto é"
+      - "quanto fica"
+      - "como paga"
+      - "como pago"
+
+  asks_about_tg:
+    description: "sim APENAS se menciona a palavra 'TG' explicitamente"
+    keywords_true:
+      - " tg "
+      - " tg?"
+      - " tg!"
+      - " tg,"
+      - " tg."
+      - "o tg"
+      - "do tg"
+      - "a tg"
+
+  asks_about_tirzec:
+    description: "sim APENAS se menciona 'Tirzec' ou 'Tizerc' explicitamente"
+    keywords_true:
+      - "tirzec"
+      - "tizerc"
+
+  client_hesitates:
+    description: "sim APENAS se diz 'vou pensar', 'vou ver', 'falar pro marido/esposa', 'depois volto'"
+    keywords_true:
+      - "vou pensar"
+      - "vou ver"
+      - "falar pro marido"
+      - "falar pra esposa"
+      - "depois volto"
+      - "deixa eu pensar"
+
+  client_accepts_or_chooses:
+    description: "sim APENAS se aceita comprar, escolhe caixa ou ampola, diz 'quero', 'fecha', 'vou pegar'"
+    keywords_true:
+      - "quero"
+      - "vou pegar"
+      - "fecha"
+      - "pode mandar"
+      - "quero a caixa"
+      - "quero a ampola"
+      - "vou levar"
+
+  negative_examples: "Perguntas sobre horário, entrega, disponibilidade NÃO são sobre pagamento."

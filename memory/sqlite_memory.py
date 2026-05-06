@@ -45,6 +45,7 @@ class SQLiteMemory:
                     role TEXT NOT NULL,
                     message TEXT NOT NULL,
                     intent TEXT,
+                    domain TEXT,
                     timestamp TEXT NOT NULL,
                     FOREIGN KEY (customer_id) REFERENCES customers(customer_id)
                 );
@@ -78,8 +79,48 @@ class SQLiteMemory:
                     ON customer_facts(customer_id);
                 CREATE INDEX IF NOT EXISTS idx_cases_customer
                     ON support_cases(customer_id, status);
+
+                CREATE TABLE IF NOT EXISTS knowledge_gaps (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    customer_id TEXT NOT NULL,
+                    query TEXT NOT NULL,
+                    intent TEXT,
+                    route TEXT,
+                    confidence REAL,
+                    retrieved_docs_count INTEGER DEFAULT 0,
+                    domain TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (customer_id) REFERENCES customers(customer_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_knowledge_gaps_created
+                    ON knowledge_gaps(created_at);
             """)
+
+            # Migration: add domain column to existing tables
+            self._migrate_add_column(conn, "conversations", "domain", "TEXT")
+            self._migrate_add_column(conn, "knowledge_gaps", "domain", "TEXT")
+
+            # Create domain indexes (after migration ensures columns exist)
+            conn.executescript("""
+                CREATE INDEX IF NOT EXISTS idx_conversations_domain
+                    ON conversations(domain, customer_id);
+                CREATE INDEX IF NOT EXISTS idx_knowledge_gaps_domain
+                    ON knowledge_gaps(domain, created_at);
+            """)
+            self._migrate_add_column(conn, "knowledge_gaps", "domain", "TEXT")
+
         logger.info(f"SQLite memory inicializada: {self.db_path}")
+
+    def _migrate_add_column(self, conn, table: str, column: str, col_type: str):
+        """Adds a column to a table if it doesn't exist (migration-safe)."""
+        try:
+            cols = [row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            if column not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                logger.info(f"Migration: added '{column}' to '{table}'")
+        except Exception as e:
+            logger.debug(f"Migration check for {table}.{column}: {e}")
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
@@ -105,23 +146,30 @@ class SQLiteMemory:
 
     # ==================== CONVERSATIONS ====================
 
-    def save_message(self, customer_id: str, role: str, message: str, intent: str = None):
-        """Salva mensagem no histórico."""
+    def save_message(self, customer_id: str, role: str, message: str, intent: str = None, domain: str = None):
+        """Salva mensagem no histórico, classificada por domain."""
         self.get_or_create_customer(customer_id)
         with self._get_conn() as conn:
             conn.execute(
-                "INSERT INTO conversations (customer_id, role, message, intent, timestamp) VALUES (?, ?, ?, ?, ?)",
-                (customer_id, role, message, intent, self._now())
+                "INSERT INTO conversations (customer_id, role, message, intent, domain, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                (customer_id, role, message, intent, domain, self._now())
             )
 
-    def get_recent_history(self, customer_id: str, limit: int = 10) -> list[dict]:
-        """Retorna últimas mensagens do cliente."""
+    def get_recent_history(self, customer_id: str, limit: int = 10, domain: str = None) -> list[dict]:
+        """Retorna últimas mensagens do cliente, opcionalmente filtradas por domain."""
         with self._get_conn() as conn:
-            rows = conn.execute(
-                "SELECT role, message, intent, timestamp FROM conversations "
-                "WHERE customer_id = ? ORDER BY timestamp DESC LIMIT ?",
-                (customer_id, limit)
-            ).fetchall()
+            if domain:
+                rows = conn.execute(
+                    "SELECT role, message, intent, timestamp FROM conversations "
+                    "WHERE customer_id = ? AND domain = ? ORDER BY timestamp DESC LIMIT ?",
+                    (customer_id, domain, limit)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT role, message, intent, timestamp FROM conversations "
+                    "WHERE customer_id = ? ORDER BY timestamp DESC LIMIT ?",
+                    (customer_id, limit)
+                ).fetchall()
         # Retornar em ordem cronológica
         return [dict(r) for r in reversed(rows)]
 
@@ -214,12 +262,12 @@ class SQLiteMemory:
 
     # ==================== CONTEXT BUILDER ====================
 
-    def get_memory_context(self, customer_id: str) -> str:
+    def get_memory_context(self, customer_id: str, domain: str = None) -> str:
         """Monta contexto de memória formatado para o LLM."""
         parts = []
 
         # Histórico recente
-        history = self.get_recent_history(customer_id, limit=5)
+        history = self.get_recent_history(customer_id, limit=5, domain=domain)
         if history:
             parts.append("Histórico recente:")
             for msg in history:
@@ -286,6 +334,79 @@ class SQLiteMemory:
                 "DELETE FROM customer_facts WHERE customer_id = ? AND fact_key = '_flow_state'",
                 (customer_id,)
             )
+
+    # ==================== KNOWLEDGE GAPS ====================
+
+    def record_knowledge_gap(
+        self,
+        customer_id: str,
+        query: str,
+        intent: str = "",
+        route: str = "",
+        confidence: float = 0.0,
+        retrieved_docs_count: int = 0,
+        domain: str = None,
+    ):
+        """Records a knowledge gap when the agent lacked context to respond well."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "INSERT INTO knowledge_gaps (customer_id, query, intent, route, confidence, retrieved_docs_count, domain, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (customer_id, query[:500], intent, route, confidence, retrieved_docs_count, domain, self._now())
+            )
+
+    def get_knowledge_gaps(self, limit: int = 100, since_days: int = 30, domain: str = None) -> list[dict]:
+        """Returns recent knowledge gaps for analysis, optionally filtered by domain."""
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
+        with self._get_conn() as conn:
+            if domain:
+                rows = conn.execute(
+                    "SELECT query, intent, route, confidence, retrieved_docs_count, domain, created_at "
+                    "FROM knowledge_gaps WHERE created_at >= ? AND domain = ? "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (cutoff, domain, limit)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT query, intent, route, confidence, retrieved_docs_count, domain, created_at "
+                    "FROM knowledge_gaps WHERE created_at >= ? "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (cutoff, limit)
+                ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_knowledge_gaps_summary(self, since_days: int = 30, domain: str = None) -> dict:
+        """Returns aggregated summary of knowledge gaps, optionally filtered by domain."""
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
+        domain_clause = " AND domain = ?" if domain else ""
+        params_base = (cutoff, domain) if domain else (cutoff,)
+        with self._get_conn() as conn:
+            total = conn.execute(
+                f"SELECT COUNT(*) as cnt FROM knowledge_gaps WHERE created_at >= ?{domain_clause}",
+                params_base
+            ).fetchone()["cnt"]
+
+            by_intent = conn.execute(
+                f"SELECT intent, COUNT(*) as cnt FROM knowledge_gaps "
+                f"WHERE created_at >= ?{domain_clause} GROUP BY intent ORDER BY cnt DESC",
+                params_base
+            ).fetchall()
+
+            by_route = conn.execute(
+                f"SELECT route, COUNT(*) as cnt FROM knowledge_gaps "
+                f"WHERE created_at >= ?{domain_clause} GROUP BY route ORDER BY cnt DESC",
+                params_base
+            ).fetchall()
+
+        return {
+            "total": total,
+            "period_days": since_days,
+            "domain_filter": domain,
+            "by_intent": [dict(r) for r in by_intent],
+            "by_route": [dict(r) for r in by_route],
+        }
 
 
 if __name__ == "__main__":

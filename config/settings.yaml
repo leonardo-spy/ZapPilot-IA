@@ -53,20 +53,22 @@ retrieval:
 classification:
   # Intenções que precisam de retrieval
   needs_retrieval:
-    - venda
-    - suporte
-    - cobranca
-    - renovacao
+    - sales
+    - info
+    - support
+    - billing
+    - renewal
 
   # Intenções que NÃO precisam de retrieval
   no_retrieval:
-    - feedback_positivo
-    - feedback_negativo
-    - humano
-    - fora_da_base
+    - greeting
+    - feedback_positive
+    - feedback_negative
+    - human
+    - out_of_scope
 
   # Intenções mapeadas para prompt de vendas
-  vendas_intents:
-    - venda
-    - renovacao
-    - cobranca
+  sales_intents:
+    - sales
+    - renewal
+    - billing

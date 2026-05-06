@@ -24,7 +24,7 @@ base_system_prompt: |
 
 # ==================== PROMPTS POR INTENÇÃO ====================
 
-vendas_prompt: |
+sales_prompt: |
   Foco: VENDAS de {domain_name}
 
   Instruções adicionais:
@@ -40,7 +40,7 @@ vendas_prompt: |
   - Use emojis com moderação (1-2 no máximo)
   - Linguagem informal mas profissional
 
-suporte_prompt: |
+support_prompt: |
   Foco: SUPORTE TÉCNICO de {domain_name}
 
   Instruções adicionais:
@@ -54,7 +54,7 @@ suporte_prompt: |
   - Respostas objetivas com passos numerados quando aplicável
   - Linguagem clara e acessível
 
-geral_prompt: |
+general_prompt: |
   Formato:
   - Respostas curtas (2-3 frases quando possível)
   - Linguagem informal mas profissional
@@ -63,24 +63,32 @@ geral_prompt: |
 
 intent_classification_prompt: |
   Classifique a intenção da mensagem do cliente em UMA das categorias abaixo.
+  CONTEXTO: Este é um chatbot de vendas e suporte de produtos. O cliente está nos chamando.
 
   Categorias:
-  - venda: quer comprar, pergunta preço, negocia, pede informações de produto
-  - suporte: dúvida sobre uso, problema técnico, algo não funciona, precisa de ajuda
-  - cobranca: pergunta sobre pagamento, pix, parcela, nota fiscal
-  - renovacao: quer comprar de novo, pedir mais, renovar serviço
-  - feedback_positivo: agradecendo, dizendo que deu certo, elogiando
-  - feedback_negativo: não resolveu, continua com problema, reclamando
-  - fora_da_base: assunto não relacionado ao produto/serviço
-  - humano: pedindo para falar com pessoa real, gerente, responsável
+  - greeting: APENAS cumprimentos puros (oi, olá, bom dia, tudo bem), sem perguntas
+  - sales: quer comprar, pergunta preço/valor, negocia, pede informações de produto
+  - info: pergunta genérica sobre o produto/serviço, quer saber como funciona, pra que serve
+  - support: problema com produto, algo não funciona, dúvida sobre uso/aplicação/conservação, erro
+  - billing: pergunta sobre pagamento, pix, parcela, nota fiscal
+  - renewal: quer comprar de novo, pedir mais, renovar serviço
+  - feedback_positive: agradecendo, dizendo que deu certo, elogiando
+  - feedback_negative: não resolveu, continua com problema, reclamando
+  - out_of_scope: assunto claramente não relacionado ao produto/serviço (previsão do tempo, piadas, etc)
+  - human: pedindo EXPLICITAMENTE para falar com pessoa real, atendente, gerente
 
-  Responda APENAS com um JSON no formato:
+  Responda APENAS com JSON válido (sem texto adicional):
   {"intent": "categoria", "confidence": 0.0-1.0, "needs_retrieval": true/false, "retrieval_top_k": 3}
 
-  Regras:
-  - needs_retrieval = true para venda, suporte, cobranca, renovacao
-  - needs_retrieval = false para feedback_positivo, feedback_negativo, humano, fora_da_base
-  - confidence reflete sua certeza na classificação
+  Regras importantes:
+  - "oi", "olá", "bom dia", "ok", "sim", "beleza" sozinhos = greeting
+  - "qual o valor", "quanto custa", "preço" = sales (mesmo sem citar produto)
+  - "como funciona", "pra que serve" = info
+  - "não funciona", "dá erro", "como aplicar", "como conservar" = support
+  - "me conta piada", "previsão do tempo" = out_of_scope (NÃO é human)
+  - human SOMENTE se pedir explicitamente um humano/atendente/gerente
+  - needs_retrieval = true para sales, info, support, billing, renewal
+  - needs_retrieval = false para greeting, feedback_positive, feedback_negative, human, out_of_scope
   - retrieval_top_k = 3 padrão, 5 se a pergunta for complexa/ampla
 
 feedback_detection_prompt: |
@@ -106,7 +114,7 @@ kb_generation_prompt: |
 
   Cada entrada deve ter este formato JSON:
   {{
-    "category": "suporte" ou "venda" ou "info",
+    "category": "support" ou "sales" ou "info",
     "intent": "identificador_curto_sem_espacos",
     "title": "Título descritivo do problema/assunto",
     "symptoms": ["sintoma 1", "sintoma 2", "sintoma 3"],

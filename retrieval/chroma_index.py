@@ -13,7 +13,8 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-COLLECTION_NAME = os.getenv("COLLECTION_NAME", "android_box_suporte")
+# Single collection for all domains; separation is done via "domain" metadata filter.
+COLLECTION_NAME = os.getenv("COLLECTION_NAME", "knowledge_base")
 
 
 def build_document_text(entry: dict) -> str:
@@ -50,13 +51,17 @@ def index_knowledge_base(
     kb_path: str = "./data/knowledge_base.json",
     chroma_path: str = "./data/chroma_db",
     embed_model: str = "all-MiniLM-L6-v2",
+    domain: str = None,
 ) -> int:
     """
     Lê knowledge_base.json e indexa no ChromaDB.
+    Each document is tagged with the active domain for multi-domain filtering.
 
     Returns:
         Número de documentos indexados
     """
+    if domain is None:
+        domain = os.getenv("BOT_DOMAIN", "custom")
     logger.info(f"Carregando KB: {kb_path}")
     with open(kb_path, encoding="utf-8") as f:
         kb = json.load(f)
@@ -102,6 +107,7 @@ def index_knowledge_base(
             "confidence": entry.get("confidence", 0.0),
             "needs_human_review": entry.get("needs_human_review", False),
             "cluster_id": entry.get("cluster_id", -1),
+            "domain": domain,
         })
 
     logger.info(f"Gerando embeddings para {len(documents)} documentos...")
@@ -128,13 +134,17 @@ def search_chroma(
     chroma_path: str = "./data/chroma_db",
     embed_model: str = "all-MiniLM-L6-v2",
     category_filter: str = None,
+    domain: str = None,
 ) -> list[dict]:
     """
-    Busca semântica no ChromaDB.
+    Busca semântica no ChromaDB, filtrada por domain ativo.
 
     Returns:
         Lista de resultados com content, metadata, score
     """
+    if domain is None:
+        domain = os.getenv("BOT_DOMAIN", "custom")
+
     from llm.embeddings import get_embedding_provider
     provider = get_embedding_provider()
     client = chromadb.PersistentClient(path=chroma_path)
@@ -142,9 +152,12 @@ def search_chroma(
 
     query_embedding = provider.encode(query, task_type="retrieval_query").flatten().tolist()
 
-    where_filter = None
+    # Build where filter: filter by domain + optional category
+    conditions = [{"domain": domain}]
     if category_filter:
-        where_filter = {"category": category_filter}
+        conditions.append({"category": category_filter})
+
+    where_filter = {"$and": conditions} if len(conditions) > 1 else conditions[0]
 
     results = collection.query(
         query_embeddings=[query_embedding],
@@ -152,6 +165,17 @@ def search_chroma(
         where=where_filter,
         include=["documents", "metadatas", "distances"],
     )
+
+    # Fallback: if domain filter returned nothing, retry without domain
+    # (backwards compat for data indexed before domain tagging)
+    if not results["ids"][0]:
+        fallback_filter = {"category": category_filter} if category_filter else None
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=top_k,
+            where=fallback_filter,
+            include=["documents", "metadatas", "distances"],
+        )
 
     output = []
     for i in range(len(results["ids"][0])):

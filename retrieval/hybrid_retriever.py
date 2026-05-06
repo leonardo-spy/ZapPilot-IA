@@ -42,12 +42,13 @@ def hybrid_search(
     semantic_weight: float = SEMANTIC_WEIGHT,
     keyword_weight: float = KEYWORD_WEIGHT,
     category_filter: str = None,
+    domain: str = None,
 ) -> list[RetrievedDocument]:
     """
-    Busca híbrida: Chroma (semântica) + BM25 (keyword).
+    Busca híbrida: Chroma (semântica) + BM25 (keyword), filtrada por domain.
 
-    1. Busca no Chroma
-    2. Busca no BM25
+    1. Busca no Chroma (com filtro domain + category)
+    2. Busca no BM25 (com filtro domain)
     3. Merge + dedup por kb_id
     4. Score combinado ponderado
     5. Ordena e retorna top_k
@@ -62,7 +63,8 @@ def hybrid_search(
     try:
         semantic_results = search_chroma(
             query, top_k=search_k, chroma_path=chroma_path,
-            embed_model=embed_model, category_filter=category_filter
+            embed_model=embed_model, category_filter=category_filter,
+            domain=domain,
         )
     except Exception as e:
         logger.warning(f"Erro na busca Chroma: {e}")
@@ -70,7 +72,7 @@ def hybrid_search(
 
     # Busca keyword (BM25)
     try:
-        keyword_results = bm25_search(query, top_k=search_k, data_dir=data_dir)
+        keyword_results = bm25_search(query, top_k=search_k, data_dir=data_dir, domain=domain)
     except Exception as e:
         logger.warning(f"Erro na busca BM25: {e}")
         keyword_results = []
