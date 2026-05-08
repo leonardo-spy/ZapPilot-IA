@@ -1,11 +1,17 @@
 """
 Indexação semântica da knowledge base no ChromaDB.
 Usa o EmbeddingProvider centralizado (Google Gemini Embedding 2 / fallback local).
+
+Dimensão:
+- Armazena a dimensão do embedding na metadata da collection.
+- Na busca, detecta mismatch e adapta automaticamente (truncate/zero-pad).
+- Prioridade: 768 (Gemini) > 384 (local).
 """
 import json
 import logging
 import os
 from pathlib import Path
+import numpy as np
 import chromadb
 
 from dotenv import load_dotenv
@@ -86,10 +92,16 @@ def index_knowledge_base(
     except Exception:
         pass
 
+    embed_dim = provider.dimension
     collection = client.create_collection(
         name=COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine"}
+        metadata={
+            "hnsw:space": "cosine",
+            "embedding_dim": embed_dim,
+            "embedding_provider": provider.name(),
+        }
     )
+    logger.info(f"Collection criada: dim={embed_dim}, provider={provider.name()}")
 
     # Gerar documentos e embeddings
     documents = []
@@ -128,6 +140,33 @@ def index_knowledge_base(
     return len(documents)
 
 
+def _adapt_embedding(embedding: list[float], target_dim: int, provider_name: str) -> list[float]:
+    """
+    Adapta embedding para a dimensão esperada pela collection.
+
+    - Se maior: trunca (primeiras target_dim posições — preserva a informação mais densa).
+    - Se menor: zero-pad (adiciona zeros no final — funciona mas perde qualidade).
+
+    Retorna a lista adaptada.
+    """
+    current_dim = len(embedding)
+    if current_dim == target_dim:
+        return embedding
+
+    if current_dim > target_dim:
+        logger.warning(
+            f"[dim-adapt] Truncando embedding de {current_dim}→{target_dim} "
+            f"(provider: {provider_name}). Qualidade pode ser reduzida."
+        )
+        return embedding[:target_dim]
+    else:
+        logger.warning(
+            f"[dim-adapt] Zero-padding embedding de {current_dim}→{target_dim} "
+            f"(provider: {provider_name}). REINDEXE com o provider correto para melhor resultado!"
+        )
+        return embedding + [0.0] * (target_dim - current_dim)
+
+
 def search_chroma(
     query: str,
     top_k: int = 5,
@@ -138,6 +177,7 @@ def search_chroma(
 ) -> list[dict]:
     """
     Busca semântica no ChromaDB, filtrada por domain ativo.
+    Adapta automaticamente a dimensão do embedding se necessário.
 
     Returns:
         Lista de resultados com content, metadata, score
@@ -150,7 +190,29 @@ def search_chroma(
     client = chromadb.PersistentClient(path=chroma_path)
     collection = client.get_collection(COLLECTION_NAME)
 
+    # Detectar dimensão da collection (armazenada na metadata)
+    collection_meta = collection.metadata or {}
+    collection_dim = collection_meta.get("embedding_dim")
+
     query_embedding = provider.encode(query, task_type="retrieval_query").flatten().tolist()
+
+    # Se não há metadata de dimensão, inferir do primeiro documento
+    if collection_dim is None:
+        try:
+            peek = collection.peek(limit=1)
+            if peek and peek.get("embeddings") and len(peek["embeddings"]) > 0:
+                collection_dim = len(peek["embeddings"][0])
+                logger.info(f"[dim-detect] Dimensão inferida da collection: {collection_dim}")
+        except Exception:
+            pass
+
+    # Adaptar dimensão se necessário
+    if collection_dim and len(query_embedding) != collection_dim:
+        logger.warning(
+            f"[dim-mismatch] Provider {provider.name()} gera dim={len(query_embedding)}, "
+            f"collection espera dim={collection_dim}. Adaptando..."
+        )
+        query_embedding = _adapt_embedding(query_embedding, collection_dim, provider.name())
 
     # Build where filter: filter by domain + optional category
     conditions = [{"domain": domain}]

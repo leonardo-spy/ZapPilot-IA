@@ -375,13 +375,18 @@ class SentenceTransformerProvider(EmbeddingProvider):
 
 
 class FallbackEmbeddingProvider(EmbeddingProvider):
-    """Provider com fallback: tenta o primário, se falhar usa secundário."""
+    """Provider com fallback: tenta o primário, se falhar usa secundário.
+    
+    Rastreia a dimensão do provider primário para detectar mismatch
+    quando cai para um fallback com dimensão diferente.
+    """
 
     def __init__(self, providers: list[EmbeddingProvider]):
         if not providers:
             raise ValueError("Pelo menos um provider é necessário")
         self.providers = providers
         self._active = None
+        self._primary_dim = providers[0].dimension  # dimensão do provider primário
 
     def name(self) -> str:
         if self._active:
@@ -392,7 +397,7 @@ class FallbackEmbeddingProvider(EmbeddingProvider):
     def dimension(self) -> int:
         if self._active:
             return self._active.dimension
-        return self.providers[0].dimension
+        return self._primary_dim
 
     def encode(self, texts: Union[str, list[str]], task_type: TaskType = "retrieval_document", **kwargs) -> np.ndarray:
         last_error = None
@@ -400,7 +405,15 @@ class FallbackEmbeddingProvider(EmbeddingProvider):
         for provider in self.providers:
             try:
                 result = provider.encode(texts, task_type=task_type, **kwargs)
-                self._active = provider
+                if self._active != provider:
+                    self._active = provider
+                    if provider.dimension != self._primary_dim:
+                        logger.warning(
+                            f"[dim-warning] Fallback ativo: {provider.name()} "
+                            f"(dim={provider.dimension}) difere do primário "
+                            f"(dim={self._primary_dim}). Busca semântica pode ter "
+                            f"qualidade reduzida até reindexar."
+                        )
                 return result
             except Exception as e:
                 last_error = e

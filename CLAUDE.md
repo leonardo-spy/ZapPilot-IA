@@ -1,5 +1,3 @@
-@AGENTS.md
-
 # ZapPilot IA — Copilot Instructions
 
 ## Project Overview
