@@ -30,6 +30,8 @@ class SQLiteMemory:
     def _init_db(self):
         """Cria tabelas se não existirem."""
         with self._get_conn() as conn:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS customers (
                     customer_id TEXT PRIMARY KEY,

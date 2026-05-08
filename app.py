@@ -1,6 +1,7 @@
 """
 FastAPI app — endpoints /chat, /feedback, /health
 """
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -101,6 +102,20 @@ class FeedbackResponse(BaseModel):
     message: str
 
 
+# ==================== PER-USER LOCK ====================
+
+_user_locks: dict[str, asyncio.Lock] = {}
+_locks_lock = asyncio.Lock()
+
+
+async def _get_user_lock(user_id: str) -> asyncio.Lock:
+    """Get or create an asyncio.Lock for a specific user (prevents race conditions)."""
+    async with _locks_lock:
+        if user_id not in _user_locks:
+            _user_locks[user_id] = asyncio.Lock()
+        return _user_locks[user_id]
+
+
 # ==================== ENDPOINTS ====================
 
 @app.post("/chat", response_model=ChatResponse)
@@ -110,7 +125,11 @@ async def chat(request: ChatRequest):
 
     logger.info(f"[/chat] customer={request.customer_id}, domain={request.domain}, msg='{request.message[:80]}'")
 
-    result = run_agent(request.customer_id, request.message, domain=request.domain)
+    lock = await _get_user_lock(request.customer_id)
+    async with lock:
+        result = await asyncio.to_thread(
+            run_agent, request.customer_id, request.message, domain=request.domain
+        )
 
     # Separar mensagens múltiplas (playbook envia com separador)
     raw_response = result["response"]

@@ -1158,9 +1158,8 @@ def _parse_json_response(text: str) -> dict:
     except json.JSONDecodeError:
         pass
 
-    # Try extracting JSON from within the text
-    import re
-    match = re.search(r'\{[^{}]+\}', text)
+    # Try extracting JSON block (supports nested braces)
+    match = re.search(r'\{.*\}', text, re.DOTALL)
     if match:
         try:
             return json.loads(match.group())
