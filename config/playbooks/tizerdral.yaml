@@ -566,6 +566,9 @@ condition_hints:
       - "o tg"
       - "do tg"
       - "a tg"
+      - "quero tg"
+      - "tem tg"
+      - "sobre tg"
 
   asks_about_tirzec:
     description: "sim APENAS se menciona 'Tirzec' ou 'Tizerc' explicitamente"

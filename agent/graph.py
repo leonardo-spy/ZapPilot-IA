@@ -142,8 +142,14 @@ def classify_intent(state: AgentState) -> dict:
 
     # Keyword pre-check: farewell detection (avoids LLM misclassifying "valeu, tchau" as general)
     msg_lower = state["user_message"].lower().strip()
-    farewell_words = {"tchau", "valeu", "obrigado", "obrigada", "flw", "falou", "adeus", "bye", "até logo", "ate logo", "até mais", "ate mais"}
-    if farewell_words.intersection(set(msg_lower.split())) and len(state["user_message"].strip()) <= 50:
+    locale = get_locale()
+    fw_conf = locale.get("farewell_precheck", {})
+    farewell_single = set(fw_conf.get("single_keywords", "").split())
+    farewell_multi = fw_conf.get("multi_keywords", [])
+    has_farewell = bool(farewell_single.intersection(set(msg_lower.split())))
+    if not has_farewell:
+        has_farewell = any(kw in msg_lower for kw in farewell_multi)
+    if has_farewell and len(state["user_message"].strip()) <= 50:
         logger.info(f"[classify_intent] Keyword pre-check → farewell")
         intent = "farewell"
         confidence = 0.9
@@ -174,14 +180,11 @@ def classify_intent(state: AgentState) -> dict:
 
         # Guard: very short messages cannot be reliably classified as feedback
         user_msg_stripped = state["user_message"].strip()
-        if len(user_msg_stripped) <= 3 and intent in ("feedback_positive", "feedback_negative"):
+        if len(user_msg_stripped) <= 5 and intent in ("feedback_positive", "feedback_negative"):
             logger.info(f"[classify_intent] Overriding feedback for short msg ({len(user_msg_stripped)} chars)")
-            intent = "out_of_scope"
+            intent = "general"
             confidence = 0.3
-            needs_retrieval = False
-        elif len(user_msg_stripped) <= 15 and intent in ("feedback_positive", "feedback_negative"):
-            # Reduce confidence for short messages classified as feedback
-            confidence = min(confidence, 0.55)
+            needs_retrieval = True
 
     except Exception as e:
         logger.warning(f"[classify_intent] Classification error: {e}")
@@ -202,9 +205,9 @@ def classify_intent(state: AgentState) -> dict:
 
 def check_feedback(state: AgentState) -> dict:
     """Check if message is feedback — uses semantic detection + LLM."""
-    # Guard: messages with ≤3 chars can't be reliable feedback
+    # Guard: messages with ≤5 chars can't be reliable feedback (defense-in-depth)
     user_msg = state.get("user_message", "").strip()
-    if len(user_msg) <= 3:
+    if len(user_msg) <= 5:
         logger.info(f"[check_feedback] Skipping — message too short ({len(user_msg)} chars)")
         return {"is_feedback": False, "feedback_type": "neutral", "resolved": False}
 
@@ -320,11 +323,9 @@ def generate_response(state: AgentState) -> dict:
 
     # Post-farewell note: keep responses brief, no handoff
     if _recent_farewell(state.get("memory_context", "")):
-        system_prompt += (
-            "\n\nIMPORTANTE: A conversa ja foi encerrada com despedida. "
-            "Responda de forma breve e direta. NAO ofereca suporte humano "
-            "nem reinicie o atendimento de vendas."
-        )
+        locale = get_locale()
+        post_farewell = locale.get("post_farewell_note", {}).get("prompt_suffix", "")
+        system_prompt += post_farewell
 
     # Retrieved documents context
     docs_context = ""
@@ -679,9 +680,9 @@ def _evaluate_condition_branch(
 
     negative_examples = hints.get("negative_examples", "")
 
-    eval_intro = cond_locale.get("eval_intro", "Evaluate if the condition is TRUE.\n")
-    cond_label = cond_locale.get("condition_label", "Condition: {condition}").format(condition=condition)
-    msg_label = cond_locale.get("message_label", "Client message: \"{message}\"").format(message=user_msg)
+    eval_intro = cond_locale.get("eval_intro", "")
+    cond_label = cond_locale.get("condition_label", "").format(condition=condition)
+    msg_label = cond_locale.get("message_label", "").format(message=user_msg)
 
     eval_prompt = f"{eval_intro}\n{cond_label}\n{msg_label}\n\n"
 
@@ -691,22 +692,19 @@ def _evaluate_condition_branch(
         eval_prompt += f"Conversation context (previous messages):\n{memory_context}\n\n"
 
     if hint_description:
-        eval_prompt += cond_locale.get("hints_header", "Interpretation guide:") + "\n"
+        eval_prompt += cond_locale.get("hints_header", "") + "\n"
         eval_prompt += f"- {condition}: {hint_description}\n\n"
     if negative_examples:
-        prefix = cond_locale.get("important_prefix", "IMPORTANT: ")
+        prefix = cond_locale.get("important_prefix", "")
         eval_prompt += f"{prefix}{negative_examples}\n"
-    eval_prompt += cond_locale.get("response_instruction", "Answer ONLY 'yes' or 'no'.")
+    eval_prompt += cond_locale.get("response_instruction", "")
 
     positive_kw = cond_locale.get("positive_answer", "yes")
 
     # LLM call: just decides yes or no
     llm = _get_llm()
     try:
-        system_content = cond_locale.get(
-            "system_prompt",
-            "You evaluate conditions about client messages. Answer only 'yes' or 'no'."
-        )
+        system_content = cond_locale.get("system_prompt", "")
         eval_messages = [
             {"role": "system", "content": system_content},
             {"role": "user", "content": eval_prompt},
@@ -788,42 +786,119 @@ def _collect_branch_messages(
 def _human_handoff_response(state: AgentState) -> dict:
     """Human handoff response."""
     locale = get_locale()
-    response = locale.get("human_handoff", {}).get(
-        "response", "Forwarding to human support."
-    )
+    response = locale.get("human_handoff", {}).get("response", "")
     return {"response": response, "route": "human_handoff"}
 
 
 def _farewell_response(state: AgentState) -> dict:
     """Farewell response — client ending conversation."""
     locale = get_locale()
-    response = locale.get("farewell", {}).get(
-        "response", "Anything you need, just reach out! Have a great day 👋"
-    )
+    response = locale.get("farewell", {}).get("response", "")
     return {"response": response, "route": "farewell"}
 
 
 def _recent_farewell(memory_context: str) -> bool:
-    """Check if the last assistant message was a farewell — prevents flow restart."""
+    """Check if the LAST assistant message was a farewell — prevents flow restart.
+
+    Only checks the most recent assistant line in memory_context to avoid
+    false positives when farewell keywords appeared earlier in the conversation.
+    """
     if not memory_context:
         return False
 
-    # Check last lines of context for farewell keywords
-    # (more robust than exact locale string match — LLM generates variable farewells)
-    farewell_keywords = [
-        "fico à disposição", "fico a disposicao", "estou à disposição",
-        "estou a disposicao", "à disposição", "a disposicao",
-        "have a great day", "tenha um ótimo dia", "tenha um otimo dia",
-        "até logo", "ate logo", "até mais", "ate mais",
-        "qualquer coisa é só chamar", "qualquer coisa e so chamar",
-        "tchau", "adeus", "goodbye", "take care",
-        "fico por aqui", "estamos por aqui",
-    ]
-    context_lower = memory_context.lower()
+    # Extract only the last assistant message from context
+    last_assistant = ""
+    for line in reversed(memory_context.splitlines()):
+        stripped = line.strip()
+        if stripped.startswith("assistant:"):
+            last_assistant = stripped
+            break
+
+    if not last_assistant:
+        return False
+
+    last_lower = last_assistant.lower()
+    locale = get_locale()
+    farewell_keywords = locale.get("farewell_detection", {}).get("keywords", [])
     for kw in farewell_keywords:
-        if kw in context_lower:
+        if kw in last_lower:
             return True
     return False
+
+
+def _inline_collect_target_flow(
+    target_flow: str,
+    flows: dict,
+    messages: dict,
+    state: "AgentState",
+    response_parts: list[str],
+) -> tuple[str, int, list[dict]] | None:
+    """Collect literal messages from a target flow's initial steps.
+
+    Appends messages to response_parts in-place.
+    Returns (flow_name, flow_step, steps_list) on success, None if target not found.
+    """
+    if not target_flow or target_flow not in flows:
+        return None
+
+    target_steps = flows[target_flow].get("steps", [])
+    flow_step = 0
+
+    for k in range(len(target_steps)):
+        ts = target_steps[k]
+        ta = ts.get("action", "")
+
+        if ta == "send":
+            mk = ts.get("message", "")
+            m = messages.get(mk, {})
+            mt = m.get("type", "text")
+            mc = m.get("content", ts.get("content", ""))
+            if mc:
+                if mt == "image":
+                    cap = m.get("caption", "")
+                    response_parts.append(f"[IMAGEM: {cap}]\n{mc}")
+                else:
+                    response_parts.append(mc.strip())
+
+        elif ta == "send_sequence":
+            for smk in ts.get("messages", []):
+                m = messages.get(smk, {})
+                m_type = m.get("type", "text")
+                m_c = m.get("content", "")
+                if m_c:
+                    if m_type == "image":
+                        cap = m.get("caption", "")
+                        response_parts.append(f"[IMAGEM: {cap}]\n{m_c}")
+                    else:
+                        response_parts.append(m_c.strip())
+
+        elif ta == "wait_response":
+            flow_step = k
+            break
+
+        elif ta == "condition":
+            bm, bg = _evaluate_condition_branch(ts, state, messages)
+            if bm is not None:
+                response_parts.extend(bm)
+            if bg:
+                # Nested goto inside this target flow — recurse
+                nested = _inline_collect_target_flow(bg, flows, messages, state, response_parts)
+                if nested is not None:
+                    return nested
+                break
+
+        elif ta == "generate_response":
+            if not response_parts:
+                return None
+            flow_step = k
+            break
+
+        else:
+            break
+    else:
+        flow_step = 0  # Exhausted all steps
+
+    return target_flow, flow_step, target_steps
 
 
 def _try_direct_flow_response(state: AgentState) -> dict | None:
@@ -949,57 +1024,15 @@ def _try_direct_flow_response(state: AgentState) -> dict | None:
                 response_parts.extend(branch_msgs)
             if branch_goto:
                 # goto_flow was triggered inside the branch — transition now
-                target_flow = branch_goto
-                if target_flow in flows:
-                    active_flow = target_flow
-                    target_steps = flows[target_flow].get("steps", [])
-                    # Inline collection from new flow (cannot continue for-loop after steps swap)
-                    for k in range(len(target_steps)):
-                        ts = target_steps[k]
-                        ta = ts.get("action", "")
-                        if ta == "send":
-                            mk = ts.get("message", "")
-                            m = messages.get(mk, {})
-                            mt = m.get("type", "text")
-                            mc = m.get("content", ts.get("content", ""))
-                            if mc:
-                                if mt == "image":
-                                    cap = m.get("caption", "")
-                                    response_parts.append(f"[IMAGEM: {cap}]\n{mc}")
-                                else:
-                                    response_parts.append(mc.strip())
-                        elif ta == "send_sequence":
-                            for mk in ts.get("messages", []):
-                                m = messages.get(mk, {})
-                                m_type = m.get("type", "text")
-                                m_c = m.get("content", "")
-                                if m_c:
-                                    if m_type == "image":
-                                        cap = m.get("caption", "")
-                                        response_parts.append(f"[IMAGEM: {cap}]\n{m_c}")
-                                    else:
-                                        response_parts.append(m_c.strip())
-                        elif ta == "wait_response":
-                            flow_step = k
-                            break
-                        elif ta == "condition":
-                            bm, bg = _evaluate_condition_branch(ts, state, messages)
-                            if bm is not None:
-                                response_parts.extend(bm)
-                        elif ta == "generate_response":
-                            if not response_parts:
-                                return None
-                            flow_step = k
-                            break
-                        else:
-                            break
-                    else:
-                        flow_step = 0  # end of flow
-                    steps = target_steps
-                    logger.info(f"[direct_flow] goto_flow(cond) → '{target_flow}' (from branch)")
-                    break  # Done — we collected from the new flow
+                result = _inline_collect_target_flow(
+                    branch_goto, flows, messages, state, response_parts
+                )
+                if result is not None:
+                    active_flow, flow_step, steps = result
+                    logger.info(f"[direct_flow] goto_flow(cond) → '{active_flow}' (from branch)")
+                    break
                 else:
-                    logger.warning(f"[direct_flow] goto_flow(cond) target '{target_flow}' not found")
+                    logger.warning(f"[direct_flow] goto_flow(cond) target '{branch_goto}' not found")
             if branch_msgs is not None:
                 # Continue collecting steps after the condition
                 pass
@@ -1013,35 +1046,11 @@ def _try_direct_flow_response(state: AgentState) -> dict | None:
         elif act == "goto_flow":
             # Transition mid-collection: switch to target flow and continue collecting
             target_flow = step.get("flow", "")
-            if target_flow and target_flow in flows:
-                target_def = flows[target_flow]
-                target_steps = target_def.get("steps", [])
-                if target_steps:
-                    active_flow = target_flow
-                    flow_step = 0
-                    steps = target_steps
-                    # Continue from step 0 of new flow in next iteration
-                    # Re-collect from new flow
-                    for j in range(0, len(target_steps)):
-                        ts = target_steps[j]
-                        ta = ts.get("action", "")
-                        if ta == "send":
-                            mk = ts.get("message", "")
-                            m = messages.get(mk, {})
-                            mt = m.get("type", "text")
-                            mc = m.get("content", ts.get("content", ""))
-                            if mc:
-                                if mt == "image":
-                                    cap = m.get("caption", "")
-                                    response_parts.append(f"[IMAGEM: {cap}]\n{mc}")
-                                else:
-                                    response_parts.append(mc.strip())
-                        elif ta == "wait_response":
-                            break
-                        elif ta in ("generate_response", "condition"):
-                            break
-                        else:
-                            break
+            result = _inline_collect_target_flow(
+                target_flow, flows, messages, state, response_parts
+            )
+            if result is not None:
+                active_flow, flow_step, steps = result
             break
 
         elif act == "generate_response":
@@ -1092,7 +1101,7 @@ def _build_playbook_context(state: AgentState) -> tuple[str, str]:
     if instructions:
         locale = get_locale()
         header = locale.get("playbook_context", {}).get(
-            "instructions_header", "--- Instructions ---"
+            "instructions_header", ""
         )
         parts.append(f"{header}\n{instructions.strip()}")
 
@@ -1134,8 +1143,7 @@ def _build_playbook_context(state: AgentState) -> tuple[str, str]:
                 # Different intent → PAUSE (don't show flow, LLM responds freely)
                 locale = get_locale()
                 note = locale.get("playbook_context", {}).get(
-                    "flow_paused_note",
-                    "--- Note: there's a {intent} flow in progress. ---"
+                    "flow_paused_note", ""
                 ).format(intent=trigger_intent)
                 parts.append(note)
     else:
@@ -1214,12 +1222,12 @@ def _format_flow_for_prompt(flow: dict, state: AgentState, from_step: int = 0) -
     if not remaining_steps:
         return ""
 
-    header = fmt.get("active_flow_header", "--- Active flow: {description} ---")
+    header = fmt.get("active_flow_header", "")
     parts = [header.format(description=flow.get("description", flow["name"]))]
     if from_step > 0:
-        cont = fmt.get("continuation", "(Continuation — step {step} of {total})")
+        cont = fmt.get("continuation", "")
         parts.append(cont.format(step=from_step + 1, total=len(all_steps)))
-    parts.append(fmt.get("literal_instruction", "IMPORTANT: Copy messages EXACTLY as written below.") + "\n")
+    parts.append(fmt.get("literal_instruction", "") + "\n")
 
     for i, step in enumerate(remaining_steps, from_step + 1):
         action = step.get("action", "")
@@ -1229,12 +1237,12 @@ def _format_flow_for_prompt(flow: dict, state: AgentState, from_step: int = 0) -
             msg = messages.get(msg_key, {})
             content = msg.get("content", step.get("content", ""))
             if content:
-                label = fmt.get("send_literal", "  {i}. SEND (literal):").format(i=i)
+                label = fmt.get("send_literal", "").format(i=i)
                 parts.append(f"{label}\n\"\"\"\n{content.strip()}\n\"\"\"")
 
         elif action == "send_sequence":
             msg_keys = step.get("messages", [])
-            label = fmt.get("send_sequence", "  {i}. SEND SEQUENCE:").format(i=i)
+            label = fmt.get("send_sequence", "").format(i=i)
             parts.append(label)
             for mk in msg_keys:
                 m = messages.get(mk, {})
@@ -1244,59 +1252,59 @@ def _format_flow_for_prompt(flow: dict, state: AgentState, from_step: int = 0) -
                     parts.append(f"     → [IMAGEM: {m.get('caption', mk)}]")
 
         elif action == "wait_response":
-            label = fmt.get("wait_response", "  {i}. WAIT for client response").format(i=i)
+            label = fmt.get("wait_response", "").format(i=i)
             parts.append(label)
             break  # Don't show steps after the next wait
 
         elif action == "condition":
             cond = step.get("if", "")
-            label = fmt.get("evaluate_condition", "  {i}. EVALUATE — IF {condition}:").format(i=i, condition=cond)
+            label = fmt.get("evaluate_condition", "").format(i=i, condition=cond)
             parts.append(label)
             if step.get("then"):
-                parts.append(fmt.get("then_label", "     THEN:"))
+                parts.append(fmt.get("then_label", ""))
                 for sub in step["then"]:
                     if sub.get("action") == "send":
                         mk = sub.get("message", "")
                         m = messages.get(mk, {})
                         content = m.get("content", mk)
-                        send_label = fmt.get("send_in_branch", "       SEND (literal):")
+                        send_label = fmt.get("send_in_branch", "")
                         parts.append(f"{send_label}\n\"\"\"\n{content.strip()}\n\"\"\"")
                     elif sub.get("action") == "goto_flow":
-                        goto = fmt.get("goto_flow_branch", "       → follow flow: {flow}").format(flow=sub.get("flow"))
+                        goto = fmt.get("goto_flow_branch", "").format(flow=sub.get("flow"))
                         parts.append(goto)
             if step.get("else"):
-                parts.append(fmt.get("else_label", "     ELSE:"))
+                parts.append(fmt.get("else_label", ""))
                 for sub in step["else"]:
                     if sub.get("action") == "send":
                         mk = sub.get("message", "")
                         m = messages.get(mk, {})
                         content = m.get("content", mk)
-                        send_label = fmt.get("send_in_branch", "       SEND (literal):")
+                        send_label = fmt.get("send_in_branch", "")
                         parts.append(f"{send_label}\n\"\"\"\n{content.strip()}\n\"\"\"")
                     elif sub.get("action") == "goto_flow":
-                        goto = fmt.get("goto_flow_branch", "       → follow flow: {flow}").format(flow=sub.get("flow"))
+                        goto = fmt.get("goto_flow_branch", "").format(flow=sub.get("flow"))
                         parts.append(goto)
 
         elif action == "generate_response":
-            label = fmt.get("generate_response", "  {i}. RESPOND using knowledge base ({context})").format(
+            label = fmt.get("generate_response", "").format(
                 i=i, context=step.get("context", "")
             )
             parts.append(label)
 
         elif action == "goto_flow":
-            label = fmt.get("follow_flow", "  {i}. FOLLOW flow: {flow}").format(i=i, flow=step.get("flow", ""))
+            label = fmt.get("follow_flow", "").format(i=i, flow=step.get("flow", ""))
             parts.append(label)
 
         elif action == "escalate":
-            label = fmt.get("escalate", "  {i}. ESCALATE to human: {reason}").format(
+            label = fmt.get("escalate", "").format(
                 i=i, reason=step.get("reason", "")
             )
             parts.append(label)
 
-    parts.append(fmt.get("rules_header", "\nRULES:"))
-    parts.append(fmt.get("rule_literal", "- Messages marked (literal) must be copied EXACTLY."))
-    parts.append(fmt.get("rule_separate", "- Send messages as SEPARATE texts when there's more than one."))
-    parts.append(fmt.get("rule_generate", "- Only in 'generate_response' you can generate text freely."))
+    parts.append(fmt.get("rules_header", ""))
+    parts.append(fmt.get("rule_literal", ""))
+    parts.append(fmt.get("rule_separate", ""))
+    parts.append(fmt.get("rule_generate", ""))
 
     return "\n".join(parts)
 
@@ -1329,12 +1337,6 @@ def route_after_classify(state: AgentState) -> str:
     intent = state.get("intent", "")
 
     if intent in ("feedback_positive", "feedback_negative"):
-        # Guard: very short messages cannot be reliably classified as feedback
-        # Route through retrieval instead so the system has context
-        user_msg = state.get("user_message", "").strip()
-        if len(user_msg) <= 5:
-            logger.info(f"[route_after_classify] Short feedback msg ({len(user_msg)} chars), routing to retrieve")
-            return "retrieve"
         return "check_feedback"
     elif intent in ("human", "farewell"):
         return "generate_response"

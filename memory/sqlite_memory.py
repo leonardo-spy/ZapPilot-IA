@@ -265,30 +265,35 @@ class SQLiteMemory:
     # ==================== CONTEXT BUILDER ====================
 
     def get_memory_context(self, customer_id: str, domain: str = None) -> str:
-        """Monta contexto de memória formatado para o LLM."""
+        """Build formatted memory context for the LLM."""
+        from config import get_locale
+        locale = get_locale()
+        ctx_labels = locale.get("memory_context", {})
+
         parts = []
 
-        # Histórico recente
+        # Recent history
         history = self.get_recent_history(customer_id, limit=5, domain=domain)
         if history:
-            parts.append("Histórico recente:")
+            parts.append(ctx_labels.get("recent_history_label", "Recent history:"))
             for msg in history:
                 parts.append(f"  {msg['role']}: {msg['message'][:150]}")
 
-        # Fatos (excluir internos _flow_*)
+        # Facts (exclude internal _flow_*)
         facts = self.get_customer_facts(customer_id)
         visible_facts = [f for f in facts if not f["fact_key"].startswith("_flow_")]
         if visible_facts:
-            parts.append("\nFatos sobre o cliente:")
+            parts.append(ctx_labels.get("customer_facts_label", "\nFacts about the client:"))
             for f in visible_facts:
                 parts.append(f"  {f['fact_key']}: {f['fact_value']}")
 
-        # Casos abertos
+        # Open cases
         cases = self.get_open_cases(customer_id)
         if cases:
-            parts.append("\nCasos abertos:")
+            parts.append(ctx_labels.get("open_cases_label", "\nOpen cases:"))
+            no_solution = ctx_labels.get("no_solution", "none")
             for c in cases:
-                parts.append(f"  [{c['intent']}] {c['summary']} (solução tentada: {c['solution_tried'] or 'nenhuma'})")
+                parts.append(f"  [{c['intent']}] {c['summary']} ({c['solution_tried'] or no_solution})")
 
         return "\n".join(parts) if parts else ""
 

@@ -159,9 +159,15 @@ async def feedback(request: FeedbackRequest):
         cases = memory.get_open_cases(request.customer_id)
         for case in cases:
             memory.resolve_case(case["id"])
-        return FeedbackResponse(status="ok", message="Caso marcado como resolvido")
+        from config import get_locale
+        locale = get_locale()
+        fb = locale.get("feedback_endpoint", {})
+        return FeedbackResponse(status="ok", message=fb.get("resolved", "Case marked as resolved"))
     else:
-        return FeedbackResponse(status="ok", message="Feedback registrado")
+        from config import get_locale
+        locale = get_locale()
+        fb = locale.get("feedback_endpoint", {})
+        return FeedbackResponse(status="ok", message=fb.get("registered", "Feedback registered"))
 
 
 @app.get("/health")

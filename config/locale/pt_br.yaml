@@ -15,6 +15,10 @@ human_handoff:
 farewell:
   response: "Qualquer coisa é só chamar! Fico à disposição 👋"
 
+# --- Post-farewell prompt suffix ---
+post_farewell_note:
+  prompt_suffix: "\n\nIMPORTANTE: A conversa já foi encerrada com despedida. Responda de forma breve e direta. NÃO ofereça suporte humano nem reinicie o atendimento de vendas."
+
 # --- Error/fallback responses (shown directly to user) ---
 errors:
   technical_difficulty: "Desculpe, estou com dificuldade técnica. Vou encaminhar para suporte humano."

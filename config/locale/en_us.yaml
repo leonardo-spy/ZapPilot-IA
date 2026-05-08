@@ -57,6 +57,63 @@ human_handoff:
 farewell:
   response: "Anything you need, just reach out! Have a great day 👋"
 
+# --- Post-farewell prompt suffix (injected into system prompt after farewell) ---
+post_farewell_note:
+  prompt_suffix: "\n\nIMPORTANT: The conversation was already closed with a farewell. Respond briefly and directly. Do NOT offer human support and do NOT restart the sales flow."
+
+# --- Farewell keyword pre-check (used in classify_intent for fast farewell detection) ---
+farewell_precheck:
+  # Single-word: matched via word-level set intersection (msg.split())
+  single_keywords: "tchau valeu obrigado obrigada flw falou adeus bye"
+  # Multi-word: matched via substring scan (can't use set.split())
+  multi_keywords:
+    - "até logo"
+    - "ate logo"
+    - "até mais"
+    - "ate mais"
+
+# --- Farewell detection keywords (used in _recent_farewell to check last assistant message) ---
+farewell_detection:
+  keywords:
+    - "fico à disposição"
+    - "fico a disposicao"
+    - "estou à disposição"
+    - "estou a disposicao"
+    - "à disposição"
+    - "a disposicao"
+    - "have a great day"
+    - "tenha um ótimo dia"
+    - "tenha um otimo dia"
+    - "até logo"
+    - "ate logo"
+    - "até mais"
+    - "ate mais"
+    - "qualquer coisa é só chamar"
+    - "qualquer coisa e so chamar"
+    - "tchau"
+    - "adeus"
+    - "goodbye"
+    - "take care"
+    - "fico por aqui"
+    - "estamos por aqui"
+
+# --- Memory context labels (injected into LLM context by sqlite_memory) ---
+memory_context:
+  recent_history_label: "Recent history:"
+  customer_facts_label: "\nFacts about the client:"
+  open_cases_label: "\nOpen cases:"
+  no_solution: "none"
+
+# --- RAG prompt labels ---
+rag_labels:
+  memory_header: "\n--- Client memory ---"
+  knowledge_header: "\n--- Knowledge base ---"
+
+# --- Feedback endpoint responses ---
+feedback_endpoint:
+  resolved: "Case marked as resolved"
+  registered: "Feedback registered"
+
 # --- Intent classification context templates ---
 classify_intent:
   products_context: "\n\nBusiness products/terms: {products}\nIf the message mentions these terms, it's sales or info (NEVER greeting)."

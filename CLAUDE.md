@@ -114,6 +114,46 @@ Defined in playbook YAML under `condition_hints:`. Each has:
 - **Key rotation:** 6 Groq keys with automatic rotation on 429
 - **BM25 normalization:** Already normalized 0-1 in `bm25_index.py` before hybrid merge
 
+## Internal Patterns & Pitfalls
+
+### Keyword Matching — Two Different Mechanisms
+There are **two separate keyword matching systems**. Confusing them causes subtle bugs:
+
+1. **`_keyword_precheck()`** — used for condition_hints evaluation
+   - Substring matching: `if kw in combined` (case insensitive)
+   - Pads user message with spaces: `f" {user_msg.lower().strip()} "` → so `" tg "` matches end-of-message
+   - Supports multi-word keywords naturally ("quero tg" works as substring)
+
+2. **Farewell keyword pre-check** — used in `classify_intent()` for farewell detection
+   - Uses **two separate sets**: `farewell_single` (word-level via `set.split()`) and `farewell_multi` (substring matching)
+   - Single-word: `farewell_single & set(msg_lower.split())` — fast intersection
+   - Multi-word: `any(kw in msg_lower for kw in farewell_multi)` — substring scan
+   - **PITFALL:** If you put a multi-word keyword (e.g., "até logo") in the single-word set, it will NEVER match because `set.split()` breaks it into individual words
+
+### `_recent_farewell()` — Last Assistant Message Only
+- Checks only the **last assistant line** in `memory_context`, not the entire history
+- Parses `memory_context` line-by-line in reverse, looking for `assistant:` prefix
+- **PITFALL:** If this ever scans the full memory_context, a farewell keyword from early in a long conversation would permanently block all future flows for that customer
+
+### `_inline_collect_target_flow()` — DRY Helper for Flow Step Collection
+- Extracted helper that collects literal messages from a target flow's steps
+- Used by `_try_direct_flow_response()` for: main loop, `branch_goto`, and `goto_flow` handlers
+- Handles step types: `send`, `send_sequence`, `wait_response`, `condition` (recursive), `generate_response`, nested `goto_flow`
+- Returns `(flow_name, flow_step, steps_list) | None`
+- **Any changes to flow step handling must go through this single helper** — never duplicate the logic
+
+### Feedback Guards — Consolidated Threshold
+- Very short messages (≤5 chars like "?", "ok", "sim") are classified as `general` with `needs_retrieval=True` in `classify_intent()`
+- Defense-in-depth: `check_feedback()` also skips feedback logic for messages ≤5 chars
+- **PITFALL:** If thresholds diverge across functions, edge cases like "?" may get misclassified as feedback/out_of_scope instead of continuing the active flow
+
+### Post-Farewell Behavior
+- After farewell, if user sends another message (e.g., "ah ok"), `_recent_farewell()` detects it
+- `classify_intent()` overrides greeting → `general` to prevent flow restart
+- `_try_direct_flow_response()` skips flow execution
+- `generate_response()` appends a locale-based suffix (`post_farewell_note.prompt_suffix`) instructing the LLM to respond briefly without restarting sales
+- The suffix text lives in `config/locale/en_us.yaml` (English) and `config/locale/pt_br.yaml` (Portuguese override)
+
 ## Known Issues
 
 - **ChromaDB dimension mismatch:** Expects 384, gets 768. Only keyword/BM25 search works

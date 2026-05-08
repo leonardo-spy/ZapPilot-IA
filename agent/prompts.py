@@ -101,14 +101,20 @@ def get_system_prompt(intent: str) -> str:
 
 
 def build_rag_prompt(system_prompt: str, context: str, memory_context: str = "") -> str:
-    """Monta system prompt completo com contexto RAG e memória."""
+    """Build full system prompt with RAG context and memory."""
+    from config import get_locale
+    locale = get_locale()
+    rag = locale.get("rag_labels", {})
+
     parts = [system_prompt]
 
     if memory_context:
-        parts.append(f"\n--- Memória do cliente ---\n{memory_context}")
+        header = rag.get("memory_header", "\n--- Client memory ---")
+        parts.append(f"{header}\n{memory_context}")
 
     if context:
-        parts.append(f"\n--- Base de conhecimento ---\n{context}")
+        header = rag.get("knowledge_header", "\n--- Knowledge base ---")
+        parts.append(f"{header}\n{context}")
         prompts = load_prompts()
         rule = prompts.get("rag_priority_rule", "")
         if rule:
