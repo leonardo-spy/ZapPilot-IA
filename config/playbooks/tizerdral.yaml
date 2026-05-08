@@ -204,37 +204,45 @@ flows:
 
       - action: wait_response
 
-      # Diferenciar experiente vs iniciante
+      # Diferenciar experiente vs iniciante, com detecção de TG/Tirzec imediata
       - action: condition
         if: "client_already_uses_similar_product"
         then:
-          - action: send
-            message: resposta_experiente
+          - action: condition
+            if: "asks_about_tirzec"
+            then:
+              - action: send
+                message: nao_tenho_tirzec
+              - action: send
+                message: ja_usei_todas
+              - action: send
+                message: resposta_experiente
+            else:
+              - action: condition
+                if: "asks_about_tg"
+                then:
+                  - action: send
+                    message: nao_tenho_tg
+                  - action: send
+                    message: ja_usei_todas
+                  - action: send
+                    message: resposta_experiente
+                else:
+                  - action: send
+                    message: resposta_experiente
         else:
           - action: send
             message: resposta_iniciante
 
       - action: wait_response
 
-      # Sequência de explicação (fotos + textos)
-      - action: send_sequence
-        messages:
-          - foto_seringa
-          - foto_frasco
-          - explicacao_entrega
-          - explicacao_concentracao
-          - explicacao_duracao
-        delay_between: "2s"
-
-      - action: wait_response
-
-      # Reagir à resposta do cliente
+      # Reagir à resposta do cliente — verificar pagamento/TG/Tirzec ANTES de enviar fotos
+      # IMPORTANTE: goto_flow sem wait_response no branch then para transicionar imediatamente
       - action: condition
         if: "asks_payment_method"
         then:
           - action: send
             message: formas_pagamento
-          - action: wait_response
           - action: goto_flow
             flow: fechamento_venda
         else:
@@ -254,8 +262,26 @@ flows:
                   - action: send
                     message: ja_usei_todas
                 else:
-                  - action: generate_response
-                    context: "responder dúvida do cliente sobre Tizerdral usando RAG"
+                  - action: condition
+                    if: "client_hesitates"
+                    then:
+                      - action: send
+                        message: anvisa_escassez
+                    else:
+                      - action: generate_response
+                        context: "responder dúvida do cliente sobre Tizerdral usando RAG"
+
+      - action: wait_response
+
+      # Sequência de explicação (fotos + textos) — só envia se cliente não perguntou sobre pagamento
+      - action: send_sequence
+        messages:
+          - foto_seringa
+          - foto_frasco
+          - explicacao_entrega
+          - explicacao_concentracao
+          - explicacao_duracao
+        delay_between: "2s"
 
       - action: wait_response
 
@@ -277,8 +303,28 @@ flows:
       - action: condition
         if: "client_already_uses_similar_product"
         then:
-          - action: send
-            message: resposta_experiente
+          - action: condition
+            if: "asks_about_tirzec"
+            then:
+              - action: send
+                message: nao_tenho_tirzec
+              - action: send
+                message: ja_usei_todas
+              - action: send
+                message: resposta_experiente
+            else:
+              - action: condition
+                if: "asks_about_tg"
+                then:
+                  - action: send
+                    message: nao_tenho_tg
+                  - action: send
+                    message: ja_usei_todas
+                  - action: send
+                    message: resposta_experiente
+                else:
+                  - action: send
+                    message: resposta_experiente
         else:
           - action: send
             message: resposta_iniciante

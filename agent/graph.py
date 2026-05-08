@@ -140,6 +140,22 @@ def classify_intent(state: AgentState) -> dict:
         ctx = locale.get("classify_intent", {})
         messages[0]["content"] += ctx.get("active_flow_context", "").format(flow=active_flow)
 
+    # Keyword pre-check: farewell detection (avoids LLM misclassifying "valeu, tchau" as general)
+    msg_lower = state["user_message"].lower().strip()
+    farewell_words = {"tchau", "valeu", "obrigado", "obrigada", "flw", "falou", "adeus", "bye", "até logo", "ate logo", "até mais", "ate mais"}
+    if farewell_words.intersection(set(msg_lower.split())) and len(state["user_message"].strip()) <= 50:
+        logger.info(f"[classify_intent] Keyword pre-check → farewell")
+        intent = "farewell"
+        confidence = 0.9
+        needs_retrieval = False
+        return {
+            **state,
+            "intent": intent,
+            "intent_confidence": confidence,
+            "needs_retrieval": needs_retrieval,
+            "route": "direct",
+        }
+
     try:
         response = llm.chat(messages, temperature=0.1, max_tokens=100)
         # Extrair JSON da resposta
@@ -149,6 +165,23 @@ def classify_intent(state: AgentState) -> dict:
         confidence = float(result.get("confidence", 0.5))
         needs_retrieval = result.get("needs_retrieval", True)
         retrieval_top_k = int(result.get("retrieval_top_k", 3))
+
+        # Guard: after farewell, don't classify anything as greeting (avoid restart)
+        if intent == "greeting" and _recent_farewell(state.get("memory_context", "")):
+            logger.info("[classify_intent] Overriding greeting after farewell → general")
+            intent = "general"
+            confidence = 0.4
+
+        # Guard: very short messages cannot be reliably classified as feedback
+        user_msg_stripped = state["user_message"].strip()
+        if len(user_msg_stripped) <= 3 and intent in ("feedback_positive", "feedback_negative"):
+            logger.info(f"[classify_intent] Overriding feedback for short msg ({len(user_msg_stripped)} chars)")
+            intent = "out_of_scope"
+            confidence = 0.3
+            needs_retrieval = False
+        elif len(user_msg_stripped) <= 15 and intent in ("feedback_positive", "feedback_negative"):
+            # Reduce confidence for short messages classified as feedback
+            confidence = min(confidence, 0.55)
 
     except Exception as e:
         logger.warning(f"[classify_intent] Classification error: {e}")
@@ -169,6 +202,12 @@ def classify_intent(state: AgentState) -> dict:
 
 def check_feedback(state: AgentState) -> dict:
     """Check if message is feedback — uses semantic detection + LLM."""
+    # Guard: messages with ≤3 chars can't be reliable feedback
+    user_msg = state.get("user_message", "").strip()
+    if len(user_msg) <= 3:
+        logger.info(f"[check_feedback] Skipping — message too short ({len(user_msg)} chars)")
+        return {"is_feedback": False, "feedback_type": "neutral", "resolved": False}
+
     # First try fast semantic detection via domain embeddings
     try:
         from preprocessing.cleaner import is_semantic_feedback
@@ -279,6 +318,14 @@ def generate_response(state: AgentState) -> dict:
     if playbook_context:
         system_prompt += "\n" + playbook_context
 
+    # Post-farewell note: keep responses brief, no handoff
+    if _recent_farewell(state.get("memory_context", "")):
+        system_prompt += (
+            "\n\nIMPORTANTE: A conversa ja foi encerrada com despedida. "
+            "Responda de forma breve e direta. NAO ofereca suporte humano "
+            "nem reinicie o atendimento de vendas."
+        )
+
     # Retrieved documents context
     docs_context = ""
     if state.get("retrieved_docs"):
@@ -384,17 +431,25 @@ def _update_flow_state(state: AgentState, memory, customer_id: str):
 
     # If no active flow → try to select a new one
     if not active_flow:
-        try:
-            from config import get_flow_by_trigger
-            conditions = _resolve_flow_conditions(state)
-            flow = get_flow_by_trigger(intent=intent, conditions=conditions)
-            if flow:
-                active_flow = flow["name"]
-                flow_step = 0
-                memory.save_flow_state(customer_id, active_flow, flow_step)
-                logger.info(f"[flow_state] New flow: '{active_flow}'")
-        except Exception as e:
-            logger.debug(f"[flow_state] No flow: {e}")
+        # Guard: don't discover flow if conversation recently ended with farewell
+        if not _recent_farewell(state.get("memory_context", "")):
+            try:
+                from config import get_flow_by_trigger
+                conditions = _resolve_flow_conditions(state)
+                flow = get_flow_by_trigger(intent=intent, conditions=conditions)
+                if flow:
+                    active_flow = flow["name"]
+                    # Advance past opening messages (LLM already handled them)
+                    steps = flow.get("steps", [])
+                    flow_step = 0
+                    for j in range(len(steps)):
+                        if steps[j].get("action") == "wait_response":
+                            flow_step = j
+                            break
+                    memory.save_flow_state(customer_id, active_flow, flow_step)
+                    logger.info(f"[flow_state] New flow: '{active_flow}'")
+            except Exception as e:
+                logger.debug(f"[flow_state] No flow: {e}")
         return
 
     # Active flow → check if intent matches the flow trigger
@@ -587,10 +642,11 @@ def _keyword_precheck(condition: str, user_msg: str, memory_context: str = "") -
 
 def _evaluate_condition_branch(
     step: dict, state: AgentState, messages: dict
-) -> list[str] | None:
+) -> tuple[list[str] | None, str]:
     """
     Evaluates a condition step using LLM to decide the branch (then/else).
-    Returns list of literal messages from chosen branch, or None on failure.
+    Returns (list of literal messages from chosen branch, goto_target).
+    goto_target is set if a goto_flow was encountered inside the branch.
     """
     condition = step.get("if", "")
     then_actions = step.get("then", [])
@@ -598,7 +654,7 @@ def _evaluate_condition_branch(
     user_msg = state.get("user_message", "")
 
     if not condition or (not then_actions and not else_actions):
-        return None
+        return None, ""
 
     # Pre-check via keywords before calling LLM (avoids rate limit + inconsistencies)
     memory_context = state.get("memory_context", "")
@@ -607,7 +663,7 @@ def _evaluate_condition_branch(
         logger.info(f"[condition_eval] '{condition}' → {'yes' if is_true else 'no'} (keyword_match)")
         branch = then_actions if is_true else else_actions
         if not branch:
-            return []
+            return [], ""
         return _collect_branch_messages(branch, state, messages)
 
     # Build eval prompt dynamically from config hints + locale
@@ -661,23 +717,28 @@ def _evaluate_condition_branch(
         logger.info(f"[condition_eval] '{condition}' → {answer} (is_true={is_true})")
     except Exception as e:
         logger.warning(f"[condition_eval] Failed to evaluate '{condition}': {e}")
-        return None
+        return None, ""
 
     # Choose branch
     branch = then_actions if is_true else else_actions
     if not branch:
-        return []
+        return [], ""
 
     # Collect literal messages from branch
-    parts = _collect_branch_messages(branch, state, messages)
-    return parts
+    parts, goto_target = _collect_branch_messages(branch, state, messages)
+    return parts, goto_target
 
 
 def _collect_branch_messages(
     actions: list[dict], state: AgentState, messages: dict
-) -> list[str]:
-    """Collect literal messages from an action list (supports nested conditions)."""
-    parts = []
+) -> tuple[list[str], str]:
+    """Collect literal messages from an action list (supports nested conditions).
+
+    Returns (parts, goto_target) where goto_target is the target flow name
+    if a goto_flow was encountered, empty string otherwise.
+    """
+    parts: list[str] = []
+    goto_target = ""
     for sub in actions:
         sub_action = sub.get("action", "")
         if sub_action == "send":
@@ -703,19 +764,25 @@ def _collect_branch_messages(
                         parts.append(sm_content.strip())
         elif sub_action == "condition":
             # Nested condition — evaluate recursively
-            nested = _evaluate_condition_branch(sub, state, messages)
-            if nested is not None:
-                parts.extend(nested)
-            else:
+            nested_parts, nested_goto = _evaluate_condition_branch(sub, state, messages)
+            if nested_parts is not None:
+                parts.extend(nested_parts)
+            if nested_goto:
+                goto_target = nested_goto
+                break
+            if nested_parts is None and not nested_goto:
                 break  # Evaluation failed — stop
         elif sub_action == "goto_flow":
+            goto_target = sub.get("flow", "")
             break
         elif sub_action == "wait_response":
             break
         else:
-            # generate_response etc — parar
+            # generate_response, end etc → need LLM
+            if not parts and not goto_target:
+                return None, ""
             break
-    return parts
+    return parts, goto_target
 
 
 def _human_handoff_response(state: AgentState) -> dict:
@@ -736,17 +803,46 @@ def _farewell_response(state: AgentState) -> dict:
     return {"response": response, "route": "farewell"}
 
 
+def _recent_farewell(memory_context: str) -> bool:
+    """Check if the last assistant message was a farewell — prevents flow restart."""
+    if not memory_context:
+        return False
+
+    # Check last lines of context for farewell keywords
+    # (more robust than exact locale string match — LLM generates variable farewells)
+    farewell_keywords = [
+        "fico à disposição", "fico a disposicao", "estou à disposição",
+        "estou a disposicao", "à disposição", "a disposicao",
+        "have a great day", "tenha um ótimo dia", "tenha um otimo dia",
+        "até logo", "ate logo", "até mais", "ate mais",
+        "qualquer coisa é só chamar", "qualquer coisa e so chamar",
+        "tchau", "adeus", "goodbye", "take care",
+        "fico por aqui", "estamos por aqui",
+    ]
+    context_lower = memory_context.lower()
+    for kw in farewell_keywords:
+        if kw in context_lower:
+            return True
+    return False
+
+
 def _try_direct_flow_response(state: AgentState) -> dict | None:
     """
     Try to execute flow steps directly (without LLM).
     When the current step is send/send_sequence, returns LITERAL messages.
     Returns None if LLM is needed (condition, generate_response, etc).
     """
+    # Guard: don't continue/restart a flow if the conversation just ended with farewell
+    if _recent_farewell(state.get("memory_context", "")):
+        logger.info("[_try_direct_flow_response] Recent farewell detected — skipping flow")
+        return None
+
     active_flow = state.get("active_flow", "")
     flow_step = state.get("flow_step", 0)
 
     # If no active flow, try to discover one (for greeting → sales)
     if not active_flow:
+
         try:
             from config import get_flow_by_trigger
             current_intent = state.get("intent", "")
@@ -848,10 +944,65 @@ def _try_direct_flow_response(state: AgentState) -> dict | None:
 
         elif act == "condition":
             # Evaluate condition with LLM (yes/no) and pick correct branch
-            branch_msgs = _evaluate_condition_branch(step, state, messages)
+            branch_msgs, branch_goto = _evaluate_condition_branch(step, state, messages)
             if branch_msgs is not None:
                 response_parts.extend(branch_msgs)
+            if branch_goto:
+                # goto_flow was triggered inside the branch — transition now
+                target_flow = branch_goto
+                if target_flow in flows:
+                    active_flow = target_flow
+                    target_steps = flows[target_flow].get("steps", [])
+                    # Inline collection from new flow (cannot continue for-loop after steps swap)
+                    for k in range(len(target_steps)):
+                        ts = target_steps[k]
+                        ta = ts.get("action", "")
+                        if ta == "send":
+                            mk = ts.get("message", "")
+                            m = messages.get(mk, {})
+                            mt = m.get("type", "text")
+                            mc = m.get("content", ts.get("content", ""))
+                            if mc:
+                                if mt == "image":
+                                    cap = m.get("caption", "")
+                                    response_parts.append(f"[IMAGEM: {cap}]\n{mc}")
+                                else:
+                                    response_parts.append(mc.strip())
+                        elif ta == "send_sequence":
+                            for mk in ts.get("messages", []):
+                                m = messages.get(mk, {})
+                                m_type = m.get("type", "text")
+                                m_c = m.get("content", "")
+                                if m_c:
+                                    if m_type == "image":
+                                        cap = m.get("caption", "")
+                                        response_parts.append(f"[IMAGEM: {cap}]\n{m_c}")
+                                    else:
+                                        response_parts.append(m_c.strip())
+                        elif ta == "wait_response":
+                            flow_step = k
+                            break
+                        elif ta == "condition":
+                            bm, bg = _evaluate_condition_branch(ts, state, messages)
+                            if bm is not None:
+                                response_parts.extend(bm)
+                        elif ta == "generate_response":
+                            if not response_parts:
+                                return None
+                            flow_step = k
+                            break
+                        else:
+                            break
+                    else:
+                        flow_step = 0  # end of flow
+                    steps = target_steps
+                    logger.info(f"[direct_flow] goto_flow(cond) → '{target_flow}' (from branch)")
+                    break  # Done — we collected from the new flow
+                else:
+                    logger.warning(f"[direct_flow] goto_flow(cond) target '{target_flow}' not found")
+            if branch_msgs is not None:
                 # Continue collecting steps after the condition
+                pass
             else:
                 # Could not evaluate — stop and let full LLM handle
                 break
@@ -989,14 +1140,16 @@ def _build_playbook_context(state: AgentState) -> tuple[str, str]:
                 parts.append(note)
     else:
         # No active flow → try to discover a new one
-        conditions = _resolve_flow_conditions(state)
-        flow = get_flow_by_trigger(
-            intent=current_intent,
-            conditions=conditions,
-        )
-        # If greeting didn't find a flow, try with sales (in sales bots, greeting = sales start)
-        if not flow and current_intent == "greeting":
-            flow = get_flow_by_trigger(intent="sales", conditions=conditions)
+        # Guard: don't discover flow if conversation recently ended with farewell
+        if not _recent_farewell(state.get("memory_context", "")):
+            conditions = _resolve_flow_conditions(state)
+            flow = get_flow_by_trigger(
+                intent=current_intent,
+                conditions=conditions,
+            )
+            # If greeting didn't find a flow, try with sales (in sales bots, greeting = sales start)
+            if not flow and current_intent == "greeting":
+                flow = get_flow_by_trigger(intent="sales", conditions=conditions)
         flow_step = 0
         if flow:
             detected_flow_name = flow.get("name", "")
@@ -1176,6 +1329,12 @@ def route_after_classify(state: AgentState) -> str:
     intent = state.get("intent", "")
 
     if intent in ("feedback_positive", "feedback_negative"):
+        # Guard: very short messages cannot be reliably classified as feedback
+        # Route through retrieval instead so the system has context
+        user_msg = state.get("user_message", "").strip()
+        if len(user_msg) <= 5:
+            logger.info(f"[route_after_classify] Short feedback msg ({len(user_msg)} chars), routing to retrieve")
+            return "retrieve"
         return "check_feedback"
     elif intent in ("human", "farewell"):
         return "generate_response"
