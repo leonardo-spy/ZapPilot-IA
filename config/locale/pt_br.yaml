@@ -11,6 +11,10 @@ language: pt_br
 human_handoff:
   response: "Vou encaminhar para suporte humano para verificar melhor seu caso. Um atendente entrará em contato em breve."
 
+# --- Farewell ---
+farewell:
+  response: "Qualquer coisa é só chamar! Fico à disposição 👋"
+
 # --- Error/fallback responses (shown directly to user) ---
 errors:
   technical_difficulty: "Desculpe, estou com dificuldade técnica. Vou encaminhar para suporte humano."

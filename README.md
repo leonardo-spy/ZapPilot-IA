@@ -141,21 +141,21 @@ cp .env.example .env
 ## Configuração (.env)
 
 ```env
-# LLM
-GROQ_API_KEY=gsk_your_key_here
+# LLM (múltiplas keys separadas por vírgula = rotação automática ao esgotar quota)
+GROQ_API_KEY=gsk_key1,gsk_key2              # Rotação: key1 → key2 → fallback local
 GROQ_MODEL=llama-3.1-8b-instant
 LOCAL_LLM_URL=http://127.0.0.1:8081/v1      # Opcional: llama.cpp local
 LOCAL_LLM_MODEL=prism-ml/Bonsai-8B-gguf:Q1_0
 
-# Embeddings
-GOOGLE_API_KEY=your_google_api_key
+# Embeddings (múltiplas keys separadas por vírgula = rotação automática)
+GOOGLE_API_KEY=key1,key2,key3               # Rotação: key1 → key2 → key3 → fallback local
 GOOGLE_EMBEDDING_MODEL=gemini-embedding-2
 GOOGLE_EMBEDDING_DIM=768
 EMBEDDING_MODEL=all-MiniLM-L6-v2             # Fallback local
 
 # Rate limit (Google Embedding API)
 GOOGLE_EMBEDDING_WAIT_ON_LIMIT=true          # true=aguarda e retenta, false=fallback imediato
-GOOGLE_EMBEDDING_MAX_RETRIES=3               # Retries nos scripts (build, extract)
+GOOGLE_EMBEDDING_MAX_RETRIES=3               # Retries com wait por key (rotação não conta)
 GOOGLE_EMBEDDING_RPM=100                     # Free tier: 100 req/min
 
 # Domínio
@@ -453,6 +453,24 @@ O provider de embeddings usa **Google Gemini Embedding 2** como primário com fa
   - Clustering: `"task: clustering | query: {text}"`
 
 - **Rate limit handling**: Retry automático com backoff ao receber 429, throttle preventivo baseado em RPM
+
+### Multi-Key Rotation
+
+Tanto `GOOGLE_API_KEY` quanto `GROQ_API_KEY` aceitam múltiplas keys separadas por vírgula:
+
+```env
+GOOGLE_API_KEY=key1,key2,key3
+GROQ_API_KEY=gsk_key1,gsk_key2
+```
+
+O sistema rotaciona automaticamente entre as keys:
+
+| Situação | Comportamento |
+| --- | --- |
+| **RPM** (requests/min) | Rotaciona para próxima key sem esperar |
+| **RPD** (requests/day) | Marca key como esgotada, rotaciona para próxima |
+| Todas as keys esgotadas | Propaga erro para fallback (local) |
+| Key única | Comportamento padrão (retry com wait) |
 
 ---
 

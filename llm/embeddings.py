@@ -80,7 +80,13 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
     }
 
     def __init__(self, api_key: str = None, model: str = "gemini-embedding-2", output_dimensionality: int = 768):
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
+        raw_keys = api_key or os.getenv("GOOGLE_API_KEY", "")
+        self._api_keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
+        if not self._api_keys:
+            raise ValueError("Nenhuma GOOGLE_API_KEY configurada")
+        self._current_key_idx = 0
+        self._exhausted_keys: set[int] = set()  # Keys com quota diária esgotada
+
         self.model = model
         self._output_dim = output_dimensionality
 
@@ -94,17 +100,43 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
         if server_retries:
             self._max_retries = int(server_retries)
 
-        # Throttle: track request timestamps para prevenção
-        self._request_times: list[float] = []
+        # Throttle: track request timestamps por key
+        self._request_times_per_key: dict[int, list[float]] = {i: [] for i in range(len(self._api_keys))}
 
         from google import genai
         from google.genai import types
-        self._client = genai.Client(api_key=self.api_key)
+        self._genai = genai
         self._types = types
+        self._client = genai.Client(api_key=self._api_keys[0])
+
+        key_count = len(self._api_keys)
+        key_label = f"{key_count} key{'s' if key_count > 1 else ''}"
         logger.info(
             f"Google Gemini Embedding inicializado: {model} (dim={output_dimensionality}, "
-            f"wait_on_limit={self._wait_on_limit}, max_retries={self._max_retries}, rpm={self._rpm_limit})"
+            f"keys={key_label}, wait_on_limit={self._wait_on_limit}, "
+            f"max_retries={self._max_retries}, rpm={self._rpm_limit})"
         )
+
+    @property
+    def _current_key(self) -> str:
+        return self._api_keys[self._current_key_idx]
+
+    def _switch_to_next_key(self) -> bool:
+        """Tenta rotacionar para a próxima key disponível. Retorna False se todas esgotadas."""
+        self._exhausted_keys.add(self._current_key_idx)
+        for i in range(len(self._api_keys)):
+            candidate = (self._current_key_idx + 1 + i) % len(self._api_keys)
+            if candidate not in self._exhausted_keys:
+                self._current_key_idx = candidate
+                self._client = self._genai.Client(api_key=self._api_keys[candidate])
+                key_masked = self._api_keys[candidate][:8] + "..."
+                logger.info(
+                    f"[key-rotation] Rotacionando para key {candidate + 1}/{len(self._api_keys)} "
+                    f"({key_masked})"
+                )
+                return True
+        logger.error(f"[key-rotation] Todas as {len(self._api_keys)} keys esgotadas.")
+        return False
 
     def name(self) -> str:
         return f"google/{self.model}"
@@ -123,15 +155,18 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
     def _throttle(self):
         """Throttle preventivo: aguarda se estiver perto do RPM limit."""
         now = time.time()
+        key_idx = self._current_key_idx
+        times = self._request_times_per_key.get(key_idx, [])
         # Remove timestamps com mais de 60s
-        self._request_times = [t for t in self._request_times if now - t < 60]
+        times = [t for t in times if now - t < 60]
+        self._request_times_per_key[key_idx] = times
 
-        if len(self._request_times) >= self._rpm_limit - 5:  # margem de 5
+        if len(times) >= self._rpm_limit - 5:  # margem de 5
             # Calcular quanto falta para o mais antigo sair da janela
-            oldest = self._request_times[0]
+            oldest = times[0]
             wait_time = 60 - (now - oldest) + 0.5
             if wait_time > 0:
-                logger.info(f"[rate-limit] Throttle preventivo: aguardando {wait_time:.1f}s (RPM: {len(self._request_times)}/{self._rpm_limit})")
+                logger.info(f"[rate-limit] Throttle preventivo: aguardando {wait_time:.1f}s (RPM: {len(times)}/{self._rpm_limit}, key {key_idx + 1})")
                 time.sleep(wait_time)
 
     def _extract_retry_delay(self, error_msg: str) -> float:
@@ -186,13 +221,16 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
         return "desconhecida (verifique o log completo)"
 
     def _call_with_retry(self, contents: list, config) -> object:
-        """Executa chamada à API com retry em caso de rate limit."""
+        """Executa chamada à API com retry em caso de rate limit e rotação de keys."""
         last_error = None
+        wait_retries = 0  # Conta apenas retries com wait (não rotações)
+        rpm_tried_keys: set[int] = set()  # Keys já tentadas no ciclo RPM atual
 
-        for attempt in range(self._max_retries + 1):
+        max_attempts = (self._max_retries + 1) * len(self._api_keys) * 2
+        for _ in range(max_attempts):
             try:
                 self._throttle()
-                self._request_times.append(time.time())
+                self._request_times_per_key.setdefault(self._current_key_idx, []).append(time.time())
 
                 result = self._client.models.embed_content(
                     model=self.model,
@@ -210,32 +248,63 @@ class GoogleEmbeddingProvider(EmbeddingProvider):
                 retry_delay = self._extract_retry_delay(str(e))
                 quota = self._identify_exhausted_quota(str(e))
 
+                # Quota diária: marcar key como esgotada e rotacionar
+                if "RPD" in quota or "PerDay" in quota:
+                    logger.warning(
+                        f"[rate-limit] 429 - Quota DIÁRIA esgotada na key "
+                        f"{self._current_key_idx + 1}/{len(self._api_keys)}: {quota}."
+                    )
+                    rpm_tried_keys.discard(self._current_key_idx)
+                    if self._switch_to_next_key():
+                        rpm_tried_keys.clear()  # Reset ciclo com nova key disponível
+                        continue
+                    logger.error(f"[rate-limit] Todas as keys com quota diária esgotada.")
+                    raise
+
+                # RPM: marcar key atual como tentada neste ciclo
+                rpm_tried_keys.add(self._current_key_idx)
+
+                # Tentar rotacionar para key que ainda não tentamos neste ciclo
+                if len(self._api_keys) > 1:
+                    available = [
+                        i for i in range(len(self._api_keys))
+                        if i not in rpm_tried_keys and i not in self._exhausted_keys
+                    ]
+                    if available:
+                        next_key = available[0]
+                        self._current_key_idx = next_key
+                        self._client = self._genai.Client(api_key=self._api_keys[next_key])
+                        key_masked = self._api_keys[next_key][:8] + "..."
+                        logger.info(
+                            f"[key-rotation] RPM hit na key atual, rotacionando para key "
+                            f"{next_key + 1}/{len(self._api_keys)} ({key_masked}) sem esperar."
+                        )
+                        continue
+
+                # Todas as keys tentaram e falharam neste ciclo → wait retry
                 if not self._wait_on_limit:
                     logger.warning(
-                        f"[rate-limit] 429 - Quota estourada: {quota}. "
-                        f"GOOGLE_EMBEDDING_WAIT_ON_LIMIT=false → propagando erro para fallback."
+                        f"[rate-limit] 429 - Todas as {len(rpm_tried_keys)} keys com RPM esgotado. "
+                        f"GOOGLE_EMBEDDING_WAIT_ON_LIMIT=false → propagando para fallback."
                     )
                     raise
 
-                # Quota diária: não adianta retry, propaga direto para fallback
-                if "RPD" in quota or "PerDay" in quota:
+                wait_retries += 1
+                if wait_retries > self._max_retries:
                     logger.error(
-                        f"[rate-limit] 429 - Quota DIÁRIA esgotada: {quota}. "
-                        f"Retry inútil — propagando para fallback local."
+                        f"[rate-limit] 429 - Max retries ({self._max_retries}) atingido "
+                        f"após {len(rpm_tried_keys)} keys tentadas. Propagando erro."
                     )
                     raise
 
-                if attempt >= self._max_retries:
-                    logger.error(
-                        f"[rate-limit] 429 - Max retries ({self._max_retries}) atingido. "
-                        f"Quota: {quota}. Propagando erro."
-                    )
-                    raise
+                # Reset ciclo de keys para tentar todas novamente após esperar
+                rpm_tried_keys.clear()
 
                 logger.warning(
-                    f"[rate-limit] 429 - Quota estourada: {quota}. "
+                    f"[rate-limit] 429 - Todas as keys com RPM esgotado. "
                     f"Aguardando {retry_delay:.1f}s antes de retry "
-                    f"(tentativa {attempt + 1}/{self._max_retries})..."
+                    f"(wait {wait_retries}/{self._max_retries}, "
+                    f"key {self._current_key_idx + 1}/{len(self._api_keys)})..."
                 )
                 time.sleep(retry_delay + 1)
 
@@ -358,17 +427,18 @@ def get_embedding_provider() -> EmbeddingProvider:
     providers = []
 
     # Google Gemini Embedding 2 como primário (se tiver key)
-    google_key = os.getenv("GOOGLE_API_KEY")
-    if google_key:
+    google_keys = os.getenv("GOOGLE_API_KEY", "")
+    if google_keys.strip():
         try:
             google_model = os.getenv("GOOGLE_EMBEDDING_MODEL", "gemini-embedding-2")
             output_dim = int(os.getenv("GOOGLE_EMBEDDING_DIM", "768"))
             providers.append(GoogleEmbeddingProvider(
-                api_key=google_key,
+                api_key=google_keys,
                 model=google_model,
                 output_dimensionality=output_dim,
             ))
-            logger.info(f"Google embeddings configurado: {google_model} (dim={output_dim})")
+            key_count = len([k for k in google_keys.split(",") if k.strip()])
+            logger.info(f"Google embeddings configurado: {google_model} (dim={output_dim}, keys={key_count})")
         except Exception as e:
             logger.warning(f"Falha ao inicializar Google embeddings: {e}")
 

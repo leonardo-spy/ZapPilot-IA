@@ -56,9 +56,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Admin router (KB review, YAML editor, domain management)
+from admin.router import router as admin_router
+app.include_router(admin_router)
+
 # Servir arquivos estáticos (web chat)
 if os.path.isdir("web"):
     app.mount("/web", StaticFiles(directory="web", html=True), name="web")
+
+# Admin UI
+if os.path.isdir("admin/static"):
+    app.mount("/admin-ui", StaticFiles(directory="admin/static", html=True), name="admin-ui")
+
+# Servir assets (imagens de playbooks)
+if os.path.isdir("assets"):
+    app.mount("/assets", StaticFiles(directory="assets"), name="assets")
 
 
 # ==================== MODELS ====================
@@ -66,6 +78,7 @@ if os.path.isdir("web"):
 class ChatRequest(BaseModel):
     customer_id: str
     message: str
+    domain: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -95,9 +108,9 @@ async def chat(request: ChatRequest):
     """Endpoint principal de chat."""
     from agent.graph import run_agent
 
-    logger.info(f"[/chat] customer={request.customer_id}, msg='{request.message[:80]}'")
+    logger.info(f"[/chat] customer={request.customer_id}, domain={request.domain}, msg='{request.message[:80]}'")
 
-    result = run_agent(request.customer_id, request.message)
+    result = run_agent(request.customer_id, request.message, domain=request.domain)
 
     # Separar mensagens múltiplas (playbook envia com separador)
     raw_response = result["response"]
@@ -139,39 +152,4 @@ async def health():
         "status": "ok",
         "service": "ZapPilot IA",
         "version": "1.0.0",
-    }
-
-
-# ==================== ADMIN ENDPOINTS ====================
-
-@app.get("/admin/knowledge-gaps")
-async def knowledge_gaps(days: int = 30, top: int = 20, domain: str = None):
-    """Returns knowledge gap analysis — what info the KB is missing. Filtered by domain."""
-    import os
-    from scripts.knowledge_gaps_report import generate_report
-
-    if domain is None:
-        domain = os.getenv("BOT_DOMAIN", "android_box")
-
-    report = generate_report(days=days, top_n=top, domain=domain)
-    return {"report": report, "domain": domain}
-
-
-@app.get("/admin/knowledge-gaps/json")
-async def knowledge_gaps_json(days: int = 30, limit: int = 100, domain: str = None):
-    """Returns raw knowledge gaps data as JSON, filtered by domain."""
-    import os
-    from memory.sqlite_memory import SQLiteMemory
-
-    if domain is None:
-        domain = os.getenv("BOT_DOMAIN", "android_box")
-
-    memory = SQLiteMemory(os.getenv("DATA_DIR", "./data") + "/memory.db")
-    gaps = memory.get_knowledge_gaps(limit=limit, since_days=days, domain=domain)
-    summary = memory.get_knowledge_gaps_summary(since_days=days, domain=domain)
-
-    return {
-        "domain": domain,
-        "summary": summary,
-        "gaps": gaps,
     }

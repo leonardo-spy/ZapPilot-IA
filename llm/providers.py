@@ -1,7 +1,9 @@
 """
 LLM Providers: interface unificada para Groq, llama.cpp local e fallbacks.
+Suporta múltiplas API keys com rotação automática (comma-separated no .env).
 """
 import os
+import re
 import logging
 from abc import ABC, abstractmethod
 from openai import OpenAI
@@ -29,15 +31,63 @@ class LLMProvider(ABC):
 
 
 class GroqProvider(LLMProvider):
-    """Provider Groq via API compatível com OpenAI."""
+    """Provider Groq via API compatível com OpenAI. Suporta múltiplas keys com rotação."""
 
     def __init__(self, api_key: str = None, model: str = None):
-        self.api_key = api_key or os.getenv("GROQ_API_KEY")
+        raw_keys = api_key or os.getenv("GROQ_API_KEY", "")
+        self._api_keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
+        if not self._api_keys:
+            raise ValueError("Nenhuma GROQ_API_KEY configurada")
+        self._current_key_idx = 0
+        self._exhausted_keys: set[int] = set()
+
         self.model = model or os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
         self.client = OpenAI(
-            api_key=self.api_key,
+            api_key=self._api_keys[0],
             base_url="https://api.groq.com/openai/v1",
         )
+
+        key_count = len(self._api_keys)
+        logger.info(f"Groq inicializado: {self.model} ({key_count} key{'s' if key_count > 1 else ''})")
+
+    def _is_rate_limit_error(self, error: Exception) -> bool:
+        error_str = str(error)
+        return "429" in error_str or "rate_limit" in error_str.lower() or "quota" in error_str.lower()
+
+    def _is_daily_quota(self, error: Exception) -> bool:
+        error_str = str(error).lower()
+        return "day" in error_str or "daily" in error_str
+
+    def _extract_retry_delay(self, error: Exception) -> float:
+        match = re.search(r'try again in (\d+(?:\.\d+)?)\s*s', str(error), re.IGNORECASE)
+        if match:
+            return float(match.group(1))
+        # Groq format: "Please try again in 1m20.345s"
+        match = re.search(r'try again in (?:(\d+)m)?(\d+(?:\.\d+)?)s', str(error), re.IGNORECASE)
+        if match:
+            minutes = int(match.group(1) or 0)
+            seconds = float(match.group(2))
+            return minutes * 60 + seconds
+        return 30.0
+
+    def _switch_to_next_key(self) -> bool:
+        self._exhausted_keys.add(self._current_key_idx)
+        for i in range(len(self._api_keys)):
+            candidate = (self._current_key_idx + 1 + i) % len(self._api_keys)
+            if candidate not in self._exhausted_keys:
+                self._current_key_idx = candidate
+                self.client = OpenAI(
+                    api_key=self._api_keys[candidate],
+                    base_url="https://api.groq.com/openai/v1",
+                )
+                key_masked = self._api_keys[candidate][:8] + "..."
+                logger.info(
+                    f"[key-rotation] Groq: rotacionando para key "
+                    f"{candidate + 1}/{len(self._api_keys)} ({key_masked})"
+                )
+                return True
+        logger.error(f"[key-rotation] Groq: todas as {len(self._api_keys)} keys esgotadas.")
+        return False
 
     def name(self) -> str:
         return f"groq/{self.model}"
@@ -49,22 +99,73 @@ class GroqProvider(LLMProvider):
         max_tokens: int = 512,
         stream: bool = False,
     ) -> str:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stream=stream,
-        )
+        max_retries = 3
+        wait_retries = 0
+        max_attempts = max_retries + len(self._api_keys) * 2
+        last_error = None
 
-        if stream:
-            content = ""
-            for chunk in response:
-                delta = chunk.choices[0].delta.content or ""
-                content += delta
-            return content
-        else:
-            return response.choices[0].message.content or ""
+        for _ in range(max_attempts):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    stream=stream,
+                )
+
+                if stream:
+                    content = ""
+                    for chunk in response:
+                        delta = chunk.choices[0].delta.content or ""
+                        content += delta
+                    return content
+                else:
+                    return response.choices[0].message.content or ""
+
+            except Exception as e:
+                last_error = e
+
+                if not self._is_rate_limit_error(e):
+                    raise
+
+                if self._is_daily_quota(e):
+                    logger.warning(f"[rate-limit] Groq: quota diária esgotada na key {self._current_key_idx + 1}.")
+                    if self._switch_to_next_key():
+                        continue
+                    raise
+
+                # RPM: tentar rotacionar para outra key
+                if len(self._api_keys) > 1:
+                    available = [
+                        i for i in range(len(self._api_keys))
+                        if i != self._current_key_idx and i not in self._exhausted_keys
+                    ]
+                    if available:
+                        next_key = available[0]
+                        self._current_key_idx = next_key
+                        self.client = OpenAI(
+                            api_key=self._api_keys[next_key],
+                            base_url="https://api.groq.com/openai/v1",
+                        )
+                        key_masked = self._api_keys[next_key][:8] + "..."
+                        logger.info(f"[key-rotation] Groq: RPM hit, rotacionando para key {next_key + 1}/{len(self._api_keys)} ({key_masked})")
+                        continue
+
+                wait_retries += 1
+                if wait_retries > max_retries:
+                    raise
+
+                retry_delay = self._extract_retry_delay(e)
+                logger.warning(
+                    f"[rate-limit] Groq 429: aguardando {retry_delay:.1f}s "
+                    f"(tentativa {wait_retries}/{max_retries}, "
+                    f"key {self._current_key_idx + 1}/{len(self._api_keys)})..."
+                )
+                import time
+                time.sleep(retry_delay + 0.5)
+
+        raise last_error
 
 
 class LocalLlamaProvider(LLMProvider):
@@ -148,9 +249,9 @@ def get_default_provider() -> LLMProvider:
     providers = []
 
     # Groq como primário (se tiver key)
-    groq_key = os.getenv("GROQ_API_KEY")
-    if groq_key:
-        providers.append(GroqProvider(api_key=groq_key))
+    groq_keys = os.getenv("GROQ_API_KEY", "")
+    if groq_keys.strip():
+        providers.append(GroqProvider(api_key=groq_keys))
 
     # Local llama como fallback
     local_url = os.getenv("LOCAL_LLM_URL")

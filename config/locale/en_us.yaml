@@ -53,6 +53,26 @@ condition_eval:
 human_handoff:
   response: "I'll forward you to human support to better check your case. An agent will be in touch shortly."
 
+# --- Farewell ---
+farewell:
+  response: "Anything you need, just reach out! Have a great day 👋"
+
+# --- Intent classification context templates ---
+classify_intent:
+  products_context: "\n\nBusiness products/terms: {products}\nIf the message mentions these terms, it's sales or info (NEVER greeting)."
+  memory_context_label: "\n\nClient context:\n{memory_context}"
+  active_flow_context: "\n\nIMPORTANT: There is an active SALES flow ('{flow}'). The client is RESPONDING to sales flow questions. Messages like short answers, questions about delivery, schedule, payment, or anything related to the product/purchase should be classified as 'sales' (NOT 'greeting' or 'info')."
+
+# --- Response sanitization patterns (regex applied to LLM output) ---
+response_sanitization:
+  strip_patterns:
+    - '\[IMAGEM:[^\]]*\]\s*'
+    - '\[IMAGE:[^\]]*\]\s*'
+    - '\[FOTO:[^\]]*\]\s*'
+    - 'assets/[^\s]+\.\w{3,4}\s*'
+  strip_literals:
+    - '---MSG---'
+
 # --- Error/fallback responses ---
 errors:
   technical_difficulty: "Sorry, I'm experiencing a technical difficulty. I'll forward you to human support."

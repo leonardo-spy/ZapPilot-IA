@@ -62,6 +62,7 @@ classification:
   # Intenções que NÃO precisam de retrieval
   no_retrieval:
     - greeting
+    - farewell
     - feedback_positive
     - feedback_negative
     - human

@@ -3,6 +3,8 @@ Loader centralizado de configuração: domínio, prompts e settings.
 Padrão inspirado no Quivr (YAML para config de workflow/domínio).
 """
 import os
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -14,9 +16,28 @@ load_dotenv()
 _CONFIG_DIR = Path(__file__).parent
 _DOMAINS_DIR = _CONFIG_DIR / "domains"
 _cache: dict[str, dict[str, Any]] = {}
-_prompts_cache: dict[str, Any] | None = None
+_prompts_cache: dict[str, dict[str, Any]] = {}  # per-domain cache
 _settings_cache: dict[str, Any] | None = None
 _locale_cache: dict[str, Any] | None = None
+
+# Thread-local domain override (for per-request domain routing)
+_domain_local = threading.local()
+
+
+def get_active_domain() -> str:
+    """Returns the active domain for the current thread/request."""
+    return getattr(_domain_local, "domain", None) or os.getenv("BOT_DOMAIN", "custom")
+
+
+@contextmanager
+def domain_context(domain: str):
+    """Context manager to set the active domain for the current thread."""
+    prev = getattr(_domain_local, "domain", None)
+    _domain_local.domain = domain
+    try:
+        yield
+    finally:
+        _domain_local.domain = prev
 
 
 # ==================== LOCALE ====================
@@ -76,7 +97,7 @@ def load_domain_config(domain: str | None = None) -> dict[str, Any]:
     Carrega configuração do domínio a partir do YAML.
 
     Args:
-        domain: Nome do domínio (sem extensão). Se None, usa BOT_DOMAIN do .env.
+        domain: Nome do domínio (sem extensão). Se None, usa get_active_domain().
 
     Returns:
         Dict com a configuração do domínio.
@@ -85,7 +106,7 @@ def load_domain_config(domain: str | None = None) -> dict[str, Any]:
         FileNotFoundError: Se o arquivo YAML do domínio não existir.
     """
     if domain is None:
-        domain = os.getenv("BOT_DOMAIN", "custom")
+        domain = get_active_domain()
 
     if domain in _cache:
         return _cache[domain]
@@ -143,20 +164,30 @@ def list_domains() -> list[str]:
 # ==================== PROMPTS CONFIG ====================
 
 
-def load_prompts() -> dict[str, Any]:
-    """Carrega templates de prompts do config/prompts.yaml."""
-    global _prompts_cache
-    if _prompts_cache is not None:
-        return _prompts_cache
+def load_prompts(domain: str | None = None) -> dict[str, Any]:
+    """Carrega templates de prompts. Prioriza config/prompts/{domain}.yaml, fallback para config/prompts.yaml."""
+    if domain is None:
+        domain = get_active_domain()
 
-    prompts_path = _CONFIG_DIR / "prompts.yaml"
-    if not prompts_path.exists():
-        raise FileNotFoundError(f"Prompts config não encontrado: {prompts_path}")
+    if domain in _prompts_cache:
+        return _prompts_cache[domain]
+
+    domain_prompts_path = _CONFIG_DIR / "prompts" / f"{domain}.yaml"
+    global_prompts_path = _CONFIG_DIR / "prompts.yaml"
+
+    if domain_prompts_path.exists():
+        prompts_path = domain_prompts_path
+    elif global_prompts_path.exists():
+        prompts_path = global_prompts_path
+    else:
+        raise FileNotFoundError(
+            f"Prompts config not found: tried {domain_prompts_path} and {global_prompts_path}"
+        )
 
     with open(prompts_path, "r", encoding="utf-8") as f:
-        _prompts_cache = yaml.safe_load(f)
+        _prompts_cache[domain] = yaml.safe_load(f)
 
-    return _prompts_cache
+    return _prompts_cache[domain]
 
 
 # ==================== SETTINGS CONFIG ====================
@@ -194,13 +225,13 @@ def load_playbook(domain: str | None = None) -> dict[str, Any]:
     Carrega playbook do domínio (roteiros de conversa, mensagens, flows).
 
     Args:
-        domain: Nome do domínio. Se None, usa BOT_DOMAIN do .env.
+        domain: Nome do domínio. Se None, usa get_active_domain().
 
     Returns:
         Dict com: instructions, messages, flows
     """
     if domain is None:
-        domain = os.getenv("BOT_DOMAIN", "custom")
+        domain = get_active_domain()
 
     if domain in _playbook_cache:
         return _playbook_cache[domain]
@@ -302,8 +333,9 @@ def list_playbooks() -> list[str]:
 
 def clear_cache() -> None:
     """Limpa todos os caches (útil para testes ou hot-reload)."""
-    global _prompts_cache, _settings_cache
+    global _settings_cache, _locale_cache
     _cache.clear()
     _playbook_cache.clear()
-    _prompts_cache = None
+    _prompts_cache.clear()
     _settings_cache = None
+    _locale_cache = None

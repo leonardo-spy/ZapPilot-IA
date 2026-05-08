@@ -21,9 +21,26 @@ instructions: |
   - Sempre mencionar que já usei TG, Tirzec e agora uso Tizerdral (gera confiança)
   - Se o cliente hesitar ("vou pensar", "vou falar pro marido"), mencionar Anvisa e escassez
   - Se a conversa não avança, enviar fotos da caixa e ampolas (gera confiança)
-  - Entrega presencial em SJC com explicação de como aplicar
   - Nunca dar orientação médica direta
   - Uma caixa dura cerca de 4 a 6 meses
+
+  ENTREGA:
+  - NÓS LEVAMOS o produto até a residência do cliente em SJC (o cliente NÃO precisa buscar/trazer nada)
+  - Entrega presencial em SJC com explicação de como aplicar
+  - SEMPRE usar "levamos", "entregamos", "vamos até você" — NUNCA "pode trazer", "buscar", "retirar"
+  - Meu horário de disponibilidade é das 06:00 às 22:00, mas NÃO falar isso explicitamente pro cliente
+  - Se o cliente propor um horário dentro de 06:00-22:00: ACEITAR e confirmar
+  - Se o cliente propor um horário fora de 06:00-22:00 (ex: 3h da manhã): sugerir gentilmente outro horário ("esse horário fica difícil pra mim, consegue um pouco mais cedo/tarde?")
+  - Sempre perguntar qual horário é melhor PRO CLIENTE
+  - NUNCA dizer "até as 18h" ou qualquer limite de horário fixo explícito
+  - NUNCA dizer "24 horas" ou "disponível a qualquer hora"
+
+  PAGAMENTO:
+  - O pagamento é feito SOMENTE na hora da entrega (presencial)
+  - Aceito Pix e cartão de crédito
+  - NUNCA pedir pagamento antecipado — isso gera desconfiança
+  - Se perguntar sobre pagamento, enviar a tabela de formas_pagamento
+  - O pagamento na entrega é um diferencial de confiança — sempre reforçar isso
 
 messages:
   # --- MENSAGEM 1: Abertura ---
@@ -443,6 +460,7 @@ flows:
 condition_hints:
   client_already_uses_similar_product:
     description: "sim se diz que já usou, já usa, já utilizou, ou menciona qualquer produto similar. 'Já utilizei' ou 'já usei' = sim. Contexto: estamos vendendo tirzepatida"
+    check_history: true
     keywords_true:
       - "ja utilizei"
       - "já utilizei"
@@ -468,13 +486,14 @@ condition_hints:
       - "tizerc"
 
   asks_payment_method:
-    description: "sim APENAS se pergunta explicitamente sobre pagamento, pix, cartão, parcela, valor, preço. NÃO é sobre entrega, horário ou disponibilidade"
+    description: "sim se o cliente menciona, pergunta ou propõe pagamento de qualquer forma — pergunta sobre forma de pagamento, oferece pix, quer pagar antes, pergunta se aceita cartão, etc. NÃO é sobre entrega, horário ou disponibilidade"
     keywords_true:
       - "forma de pagamento"
       - "formas de pagamento"
       - "aceita pix"
       - "aceita cartao"
       - "aceita cartão"
+      - "pix"
       - "parcela"
       - "parcelar"
       - "quanto custa"
@@ -486,6 +505,9 @@ condition_hints:
       - "quanto fica"
       - "como paga"
       - "como pago"
+      - "pagar antes"
+      - "pagar antecipado"
+      - "mandar o pix"
 
   asks_about_tg:
     description: "sim APENAS se menciona a palavra 'TG' explicitamente"

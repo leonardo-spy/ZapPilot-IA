@@ -109,5 +109,9 @@ def build_rag_prompt(system_prompt: str, context: str, memory_context: str = "")
 
     if context:
         parts.append(f"\n--- Base de conhecimento ---\n{context}")
+        prompts = load_prompts()
+        rule = prompts.get("rag_priority_rule", "")
+        if rule:
+            parts.append(f"\n--- RULE ---\n{rule.strip()}")
 
     return "\n".join(parts)

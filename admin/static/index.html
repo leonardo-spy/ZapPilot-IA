@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZapPilot IA — Admin</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #e0e0e0; }
+        
+        .layout { display: flex; height: 100vh; }
+        .sidebar { width: 220px; background: #16213e; border-right: 1px solid #0f3460; padding: 1rem 0; flex-shrink: 0; }
+        .sidebar h2 { padding: 0 1rem 1rem; font-size: 1.1rem; color: #00d2ff; }
+        .sidebar nav a { display: block; padding: 0.6rem 1rem; color: #b0b0b0; text-decoration: none; font-size: 0.9rem; border-left: 3px solid transparent; }
+        .sidebar nav a:hover { background: #1a1a2e; color: #fff; }
+        .sidebar nav a.active { border-left-color: #00d2ff; color: #00d2ff; background: #1a1a2e; }
+        
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .topbar { background: #16213e; border-bottom: 1px solid #0f3460; padding: 0.8rem 1.5rem; display: flex; align-items: center; gap: 1rem; }
+        .topbar select { background: #1a1a2e; color: #e0e0e0; border: 1px solid #0f3460; padding: 0.4rem 0.8rem; border-radius: 4px; }
+        .topbar .title { font-weight: 600; font-size: 1rem; }
+        
+        .content { flex: 1; overflow-y: auto; padding: 1.5rem; }
+        
+        .card { background: #16213e; border: 1px solid #0f3460; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+        .card h3 { color: #00d2ff; margin-bottom: 0.5rem; font-size: 0.95rem; }
+        
+        .item-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.7rem; border-bottom: 1px solid #0f3460; }
+        .item-row:last-child { border-bottom: none; }
+        .item-row .text { flex: 1; font-size: 0.85rem; word-break: break-all; }
+        .item-row pre { flex: 1; font-size: 0.8rem; white-space: pre-wrap; background: #1a1a2e; padding: 0.3rem; border-radius: 4px; max-height: 120px; overflow-y: auto; }
+        
+        button { padding: 0.3rem 0.7rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+        .btn-approve { background: #27ae60; color: #fff; }
+        .btn-reject { background: #e74c3c; color: #fff; }
+        .btn-delete { background: #7f8c8d; color: #fff; }
+        .btn-add { background: #00d2ff; color: #000; font-weight: 600; }
+        .btn-save { background: #27ae60; color: #fff; padding: 0.5rem 1.5rem; font-size: 0.9rem; }
+        .btn-primary { background: #00d2ff; color: #000; padding: 0.5rem 1rem; }
+        button:hover { opacity: 0.85; }
+        
+        .editor-container { display: flex; flex-direction: column; height: calc(100vh - 140px); }
+        .editor-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+        .editor-desc { font-size: 0.85rem; color: #aaa; margin-bottom: 0.5rem; }
+        textarea.yaml-editor { flex: 1; width: 100%; background: #0d1117; color: #c9d1d9; border: 1px solid #0f3460; border-radius: 4px; padding: 1rem; font-family: 'Fira Code', 'Consolas', monospace; font-size: 0.85rem; resize: none; tab-size: 2; }
+        
+        .file-list { list-style: none; }
+        .file-list li { padding: 0.6rem 0.8rem; border-bottom: 1px solid #0f3460; cursor: pointer; display: flex; justify-content: space-between; }
+        .file-list li:hover { background: #1a1a2e; }
+        .file-list li .desc { font-size: 0.75rem; color: #888; }
+        
+        .status-badge { font-size: 0.7rem; padding: 0.15rem 0.5rem; border-radius: 10px; }
+        .badge-pending { background: #f39c12; color: #000; }
+        .badge-approved { background: #27ae60; color: #fff; }
+        
+        .tabs { display: flex; gap: 0; border-bottom: 1px solid #0f3460; margin-bottom: 1rem; }
+        .tabs button { background: transparent; color: #888; border: none; padding: 0.6rem 1rem; border-bottom: 2px solid transparent; font-size: 0.85rem; }
+        .tabs button.active { color: #00d2ff; border-bottom-color: #00d2ff; }
+        
+        .add-form { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+        .add-form input { flex: 1; background: #1a1a2e; color: #e0e0e0; border: 1px solid #0f3460; padding: 0.4rem 0.6rem; border-radius: 4px; font-size: 0.85rem; }
+        
+        .toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: #27ae60; color: #fff; padding: 0.7rem 1.2rem; border-radius: 6px; font-size: 0.85rem; display: none; z-index: 1000; }
+        .toast.error { background: #e74c3c; }
+        
+        .empty { text-align: center; padding: 3rem; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="layout">
+        <div class="sidebar">
+            <h2>⚡ ZapPilot Admin</h2>
+            <nav>
+                <a href="#" data-page="kb" class="active">📋 KB Review</a>
+                <a href="#" data-page="yaml">📝 YAML Editor</a>
+                <a href="#" data-page="gaps">🔍 Knowledge Gaps</a>
+            </nav>
+        </div>
+        <div class="main">
+            <div class="topbar">
+                <span class="title" id="page-title">KB Review</span>
+                <select id="domain-select"></select>
+            </div>
+            <div class="content" id="content"></div>
+        </div>
+    </div>
+    <div class="toast" id="toast"></div>
+
+    <script>
+    const API = '';  // same origin
+    let currentDomain = '';
+    let currentPage = 'kb';
+
+    // ==================== INIT ====================
+    async function init() {
+        const res = await fetch(`${API}/admin/domains`);
+        const data = await res.json();
+        const select = document.getElementById('domain-select');
+        select.innerHTML = data.domains.map(d => 
+            `<option value="${d}" ${d === data.active ? 'selected' : ''}>${d}</option>`
+        ).join('');
+        currentDomain = data.active;
+        select.onchange = () => { currentDomain = select.value; loadPage(); };
+
+        document.querySelectorAll('.sidebar nav a').forEach(a => {
+            a.onclick = (e) => {
+                e.preventDefault();
+                document.querySelectorAll('.sidebar nav a').forEach(x => x.classList.remove('active'));
+                a.classList.add('active');
+                currentPage = a.dataset.page;
+                loadPage();
+            };
+        });
+        loadPage();
+    }
+
+    function loadPage() {
+        const titles = { kb: 'KB Review', yaml: 'YAML Editor', gaps: 'Knowledge Gaps' };
+        document.getElementById('page-title').textContent = titles[currentPage] || '';
+        if (currentPage === 'kb') loadKBPage();
+        else if (currentPage === 'yaml') loadYAMLPage();
+        else if (currentPage === 'gaps') loadGapsPage();
+    }
+
+    function toast(msg, isError = false) {
+        const t = document.getElementById('toast');
+        t.textContent = msg;
+        t.className = 'toast' + (isError ? ' error' : '');
+        t.style.display = 'block';
+        setTimeout(() => t.style.display = 'none', 3000);
+    }
+
+    // ==================== KB REVIEW ====================
+    async function loadKBPage() {
+        const content = document.getElementById('content');
+        content.innerHTML = '<p>Loading...</p>';
+
+        const res = await fetch(`${API}/admin/kb/sources`);
+        const data = await res.json();
+
+        if (!data.sources.length) {
+            content.innerHTML = '<div class="empty">No KB sources found. Run generate_domain_config or extract_patterns first.</div>';
+            return;
+        }
+
+        let html = '';
+        for (const src of data.sources) {
+            const badge = src.approved 
+                ? '<span class="status-badge badge-approved">Approved</span>'
+                : '<span class="status-badge badge-pending">Pending Review</span>';
+            
+            html += `<div class="card">
+                <h3>${src.name} ${badge}</h3>
+                <p style="font-size:0.8rem;color:#888;margin-bottom:0.5rem">Domain: ${src.domain} | Categories: ${src.categories.join(', ')}</p>
+                <div class="tabs" id="tabs-${src.name}">
+                    ${src.categories.map((c, i) => `<button class="${i===0?'active':''}" onclick="loadCategory('${src.name}','${c}',this)">${c}</button>`).join('')}
+                </div>
+                <div id="items-${src.name}"></div>
+                <div style="margin-top:0.5rem;display:flex;gap:0.5rem">
+                    <button class="btn-approve" onclick="approveAll('${src.name}')">✓ Approve All</button>
+                </div>
+            </div>`;
+        }
+        content.innerHTML = html;
+
+        // Load first category of each source
+        for (const src of data.sources) {
+            if (src.categories.length) loadCategory(src.name, src.categories[0]);
+        }
+    }
+
+    async function loadCategory(source, category, tabBtn) {
+        if (tabBtn) {
+            tabBtn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+            tabBtn.classList.add('active');
+        }
+        const container = document.getElementById(`items-${source}`);
+        container.innerHTML = '<p style="font-size:0.8rem">Loading...</p>';
+
+        const res = await fetch(`${API}/admin/kb/${source}/${category}`);
+        const data = await res.json();
+
+        let html = '';
+        data.items.forEach((item, i) => {
+            const display = typeof item === 'string' ? item : JSON.stringify(item, null, 2);
+            const isObj = typeof item !== 'string';
+            html += `<div class="item-row">
+                ${isObj ? `<pre>${escHtml(display)}</pre>` : `<span class="text">${escHtml(display)}</span>`}
+                <button class="btn-delete" onclick="kbAction('${source}','${category}',${i},'delete')">✕</button>
+            </div>`;
+        });
+
+        html += `<div class="add-form">
+            <input type="text" id="add-input-${source}-${category}" placeholder="Add new item...">
+            <button class="btn-add" onclick="kbAdd('${source}','${category}')">+ Add</button>
+        </div>`;
+
+        container.innerHTML = html;
+    }
+
+    async function kbAction(source, category, index, action) {
+        const res = await fetch(`${API}/admin/kb/action`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ source, category, index, action })
+        });
+        if (res.ok) {
+            toast(`Item ${action}d`);
+            // Reload
+            const tab = document.querySelector(`#tabs-${source} button.active`);
+            loadCategory(source, category, tab);
+        } else {
+            const err = await res.json();
+            toast(err.detail || 'Error', true);
+        }
+    }
+
+    async function kbAdd(source, category) {
+        const input = document.getElementById(`add-input-${source}-${category}`);
+        let value = input.value.trim();
+        if (!value) return;
+
+        // Try parsing as JSON for complex items
+        try { value = JSON.parse(value); } catch(e) { /* keep as string */ }
+
+        const res = await fetch(`${API}/admin/kb/add`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ source, category, item: value })
+        });
+        if (res.ok) {
+            toast('Item added');
+            input.value = '';
+            const tab = document.querySelector(`#tabs-${source} button.active`);
+            loadCategory(source, category, tab);
+        } else {
+            const err = await res.json();
+            toast(err.detail || 'Error', true);
+        }
+    }
+
+    async function approveAll(source) {
+        const res = await fetch(`${API}/admin/kb/${source}/approve-all`, { method: 'POST' });
+        if (res.ok) { toast('Source approved'); loadKBPage(); }
+    }
+
+    // ==================== YAML EDITOR ====================
+    let yamlFiles = [];
+    let currentYamlKey = null;
+
+    async function loadYAMLPage() {
+        const content = document.getElementById('content');
+        const res = await fetch(`${API}/admin/yaml/files`);
+        const data = await res.json();
+        yamlFiles = data.files;
+
+        let html = `<div style="display:flex;gap:1rem;height:calc(100vh - 140px)">
+            <div style="width:280px;overflow-y:auto;border-right:1px solid #0f3460;padding-right:1rem">
+                <ul class="file-list">
+                    ${yamlFiles.map(f => `
+                        <li onclick="openYaml('${f.key}')">
+                            <div>
+                                <div>${f.path}</div>
+                                <div class="desc">${f.description}</div>
+                            </div>
+                        </li>
+                    `).join('')}
+                </ul>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column" id="yaml-editor-area">
+                <div class="empty">Select a file to edit</div>
+            </div>
+        </div>`;
+        content.innerHTML = html;
+    }
+
+    async function openYaml(key) {
+        currentYamlKey = key;
+        const area = document.getElementById('yaml-editor-area');
+        area.innerHTML = '<p>Loading...</p>';
+
+        const res = await fetch(`${API}/admin/yaml/${key}`);
+        const data = await res.json();
+
+        area.innerHTML = `
+            <div class="editor-header">
+                <span style="font-weight:600">${data.path}</span>
+                <button class="btn-save" onclick="saveYaml()">💾 Save & Reload</button>
+            </div>
+            <p class="editor-desc">${data.description}</p>
+            <textarea class="yaml-editor" id="yaml-content">${escHtml(data.content)}</textarea>
+        `;
+
+        // Tab support in textarea
+        const ta = document.getElementById('yaml-content');
+        ta.addEventListener('keydown', (e) => {
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                const start = ta.selectionStart;
+                ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(ta.selectionEnd);
+                ta.selectionStart = ta.selectionEnd = start + 2;
+            }
+        });
+    }
+
+    async function saveYaml() {
+        if (!currentYamlKey) return;
+        const content = document.getElementById('yaml-content').value;
+        const res = await fetch(`${API}/admin/yaml/${currentYamlKey}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ content })
+        });
+        if (res.ok) {
+            toast('Saved & reloaded!');
+        } else {
+            const err = await res.json();
+            toast(err.detail || 'Save failed', true);
+        }
+    }
+
+    // ==================== KNOWLEDGE GAPS ====================
+    async function loadGapsPage() {
+        const content = document.getElementById('content');
+        content.innerHTML = '<p>Loading...</p>';
+
+        const res = await fetch(`${API}/admin/knowledge-gaps/json?domain=${currentDomain}`);
+        const data = await res.json();
+
+        let html = `<div class="card">
+            <h3>Summary — ${data.domain}</h3>
+            <p style="font-size:0.85rem">Total gaps: ${data.summary?.total || 0} | Top intents: ${data.summary?.top_intents?.join(', ') || 'none'}</p>
+        </div>`;
+
+        if (data.gaps && data.gaps.length) {
+            html += '<div class="card"><h3>Recent Gaps</h3>';
+            for (const gap of data.gaps.slice(0, 50)) {
+                html += `<div class="item-row">
+                    <span class="text">${escHtml(gap.query || gap.message || JSON.stringify(gap))}</span>
+                    <span style="font-size:0.7rem;color:#888">${gap.intent || ''} | ${gap.created_at || ''}</span>
+                </div>`;
+            }
+            html += '</div>';
+        } else {
+            html += '<div class="empty">No knowledge gaps recorded yet.</div>';
+        }
+
+        content.innerHTML = html;
+    }
+
+    // ==================== UTILS ====================
+    function escHtml(s) {
+        return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    init();
+    </script>
+</body>
+</html>

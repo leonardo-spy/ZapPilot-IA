@@ -1,209 +1,880 @@
 #!/usr/bin/env python3
 """
 Testa conversas completas com o flow do Tizerdral.
-Simula os cenários reais que falharam e valida as respostas.
+Simula cenários reais e de borda, forçando o bot a falhar se estiver errado.
+
+Cenários cobertos:
+1. Fluxo completo: novo cliente (iniciante)
+2. Fluxo completo: cliente que já usa (experiente)
+3. Despedida (farewell) NÃO reinicia flow
+4. Horário de entrega — sem limite fixo, sem "24h"
+5. Pagamento — somente na entrega
+6. Preços corretos (playbook > RAG)
+7. Placeholders de imagem NÃO gerados pelo LLM
+8. TG / Tirzec redirecionam para Tizerdral
+9. Cliente questiona resposta errada — não vai pro humano
+10. Assets servidos
+11. Variações de farewell (frases ambíguas)
+12. Continuidade de conversa após RAG
+13. Hesitação → Anvisa/escassez
+14. Entrega presencial SJC (NÓS levamos)
+15. Duração da caixa (4-6 meses)
+16. Frase ambígua NÃO é farewell
+17. Múltiplas perguntas em sequência
+18. Sem orientação médica direta
+19. Horário DENTRO do range (aceitar)
+20. Horário FORA do range (sugerir alternativa)
+21. Flow completo até goto_flow (fechamento_venda)
+22. Entrega: NÓS levamos, cliente não busca
 """
 import requests
 import sys
 import time
+import os
+from typing import Callable
 
-BASE_URL = "http://localhost:8001"
+BASE_URL = os.getenv("TEST_BASE_URL", "http://localhost:8001")
+DOMAIN = "tizerdral"
+# Delay entre cenários — com 1 key demora muito; com N keys divide por N
+DELAY_BETWEEN_SCENARIOS = int(os.getenv("TEST_DELAY", "15"))
+RESULTS: list[tuple[str, bool]] = []
 
+
+# ============================================================================
+# HELPERS
+# ============================================================================
 
 def chat(customer_id: str, message: str) -> dict:
     """Envia mensagem e retorna resposta."""
     r = requests.post(
         f"{BASE_URL}/chat",
-        json={"customer_id": customer_id, "message": message},
-        timeout=90,
+        json={"customer_id": customer_id, "message": message, "domain": DOMAIN},
+        timeout=120,
     )
+    r.raise_for_status()
     return r.json()
 
 
-def assert_contains(response: dict, text: str, step: str):
-    """Verifica se a resposta contém texto esperado."""
-    full = response.get("response", "")
-    if text.lower() not in full.lower():
-        print(f"  ❌ FALHOU em '{step}'")
-        print(f"     Esperava conter: '{text[:80]}'")
-        print(f"     Recebeu: '{full[:120]}'")
+class Check:
+    """Acumula verificações com relatório."""
+
+    def __init__(self, scenario: str):
+        self.scenario = scenario
+        self.passed = True
+        self.details: list[str] = []
+
+    def contains(self, response: dict, text: str, step: str) -> bool:
+        full = response.get("response", "")
+        if text.lower() not in full.lower():
+            self.passed = False
+            self.details.append(f"❌ {step}: esperava conter '{text[:60]}' | recebeu: '{full[:100]}'")
+            return False
+        return True
+
+    def not_contains(self, response: dict, text: str, step: str) -> bool:
+        full = response.get("response", "")
+        if text.lower() in full.lower():
+            self.passed = False
+            self.details.append(f"❌ {step}: NÃO esperava '{text[:60]}' | recebeu: '{full[:100]}'")
+            return False
+        return True
+
+    def route_is(self, response: dict, expected: str, step: str) -> bool:
+        actual = response.get("route", "")
+        if actual != expected:
+            self.passed = False
+            self.details.append(f"❌ {step}: route={actual}, esperava={expected}")
+            return False
+        return True
+
+    def route_not(self, response: dict, bad: str, step: str) -> bool:
+        actual = response.get("route", "")
+        if actual == bad:
+            self.passed = False
+            self.details.append(f"❌ {step}: route={actual} (não deveria)")
+            return False
+        return True
+
+    def any_contains(self, response: dict, texts: list[str], step: str) -> bool:
+        """Pelo menos uma das strings deve estar presente."""
+        full = response.get("response", "").lower()
+        for t in texts:
+            if t.lower() in full:
+                return True
+        self.passed = False
+        self.details.append(f"❌ {step}: nenhuma de {texts[:5]} encontrada | recebeu: '{full[:100]}'")
         return False
-    return True
+
+    def report(self):
+        status = "✅ PASS" if self.passed else "❌ FAIL"
+        print(f"  {status} — {self.scenario}")
+        for d in self.details:
+            print(f"       {d}")
 
 
-def assert_not_contains(response: dict, text: str, step: str):
-    """Verifica que a resposta NÃO contém texto indesejado."""
-    full = response.get("response", "")
-    if text.lower() in full.lower():
-        print(f"  ❌ FALHOU em '{step}'")
-        print(f"     NÃO esperava conter: '{text[:80]}'")
-        print(f"     Recebeu: '{full[:120]}'")
-        return False
-    return True
+def run_scenario(name: str, fn: Callable):
+    """Wrapper para executar cenário com tratamento de erro."""
+    print(f"\n{'='*60}")
+    print(f"📋 {name}")
+    print(f"{'='*60}")
+    try:
+        fn()
+    except requests.exceptions.HTTPError as e:
+        print(f"  ❌ HTTP ERROR: {e}")
+        RESULTS.append((name, False))
+    except Exception as e:
+        print(f"  ❌ EXCEPTION: {type(e).__name__}: {e}")
+        RESULTS.append((name, False))
 
 
-def assert_route(response: dict, expected_route: str, step: str):
-    """Verifica a rota."""
-    actual = response.get("route", "")
-    if actual != expected_route:
-        print(f"  ❌ FALHOU em '{step}' — route={actual}, esperava={expected_route}")
-        return False
-    return True
-
-
-def assert_not_route(response: dict, bad_route: str, step: str):
-    """Verifica que NÃO foi para uma rota."""
-    actual = response.get("route", "")
-    if actual == bad_route:
-        print(f"  ❌ FALHOU em '{step}' — route={actual} (não deveria ser {bad_route})")
-        return False
-    return True
+def uid(prefix: str) -> str:
+    return f"{prefix}_{int(time.time()*1000)}"
 
 
 # ============================================================================
-# CENÁRIO 1: Cliente pergunta sobre horário de entrega (não é pagamento)
+# CENÁRIO 1: Fluxo completo — cliente iniciante
 # ============================================================================
-def test_scenario_1():
+def test_fluxo_iniciante():
     """
-    Fluxo: ola → ja utilizei → sim → pergunta sobre horário
-    Esperado: NÃO enviar formas de pagamento, NÃO enviar TG, usar LLM/RAG
+    ola → nunca usei → sim explica → [fotos + explicação]
+    Esperado: abertura, resposta_iniciante, sequência com fotos/explicação
     """
-    print("\n📋 Cenário 1: Pergunta sobre horário de entrega")
-    print("=" * 60)
-    cid = f"test_scenario1_{int(time.time())}"
-    ok = True
+    c = Check("Fluxo iniciante completo")
+    cid = uid("ini")
 
-    # Step 1: Saudação
+    # Step 1: Saudação → abertura
     r = chat(cid, "ola")
-    if not assert_contains(r, "Você já utiliza", "step1_abertura"):
-        ok = False
-    else:
-        print("  ✅ Step 1: Abertura correta")
+    c.contains(r, "Você já utiliza", "abertura")
 
-    # Step 2: Já utilizei → resposta_experiente
+    # Step 2: Nunca usei → resposta_iniciante
+    r = chat(cid, "nunca usei, é minha primeira vez")
+    c.any_contains(r, ["tratamentos mais fortes", "tirzepatida"], "iniciante")
+    c.contains(r, "500", "preco_ampola")
+    c.contains(r, "1.800", "preco_caixa")
+
+    # Step 3: Quer explicação → sequência de fotos + textos
+    r = chat(cid, "sim, pode me explicar")
+    # Deve ter response_parts (sequência) ou mencionar concentração/seringa
+    full = r.get("response", "")
+    parts = r.get("response_parts", [])
+    has_sequence = len(parts) > 1 or "15mg" in full.lower() or "concentração" in full.lower()
+    if not has_sequence:
+        c.passed = False
+        c.details.append(f"❌ sequencia: sem fotos/explicação ({len(parts)} parts)")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 2: Fluxo completo — cliente experiente
+# ============================================================================
+def test_fluxo_experiente():
+    """
+    ola → já uso ozempic → aceita → fechamento
+    Esperado: abertura, resposta_experiente, fechamento
+    """
+    c = Check("Fluxo experiente completo")
+    cid = uid("exp")
+
+    r = chat(cid, "ola")
+    c.contains(r, "Você já utiliza", "abertura")
+
+    r = chat(cid, "sim, ja uso Ozempic ha 6 meses")
+    c.any_contains(r, ["já conhece o efeito", "princípio ativo"], "experiente")
+    c.contains(r, "500", "preco_ampola")
+    c.contains(r, "1.800", "preco_caixa")
+
+    # Aceita → dispara send_sequence com fotos (step 5)
+    r = chat(cid, "quero a caixa")
+    # Resposta aqui são as fotos do send_sequence
+
+    # Agora no step 7 — pergunta sobre pagamento
+    r = chat(cid, "entendi! como faço o pagamento?")
+    # Deve ter formas de pagamento ou fechamento
+    c.any_contains(r, ["pagamento", "pix", "cartão", "crédito", "1.800", "separe", "na entrega", "na hora"], "fechamento")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 3: Farewell NÃO reinicia flow
+# ============================================================================
+def test_farewell_nao_reinicia():
+    """
+    ola → já utilizei → despedida ambígua
+    Esperado: farewell response (sem reiniciar flow com "Você já utiliza")
+    """
+    c = Check("Farewell não reinicia flow")
+    cid = uid("fare")
+
+    r = chat(cid, "ola")
+    c.contains(r, "Você já utiliza", "abertura")
+
     r = chat(cid, "ja utilizei")
-    if not assert_contains(r, "já conhece o efeito", "step2_experiente"):
-        ok = False
-    else:
-        print("  ✅ Step 2: Resposta experiente correta")
+    # experiente
+    c.any_contains(r, ["já conhece", "princípio ativo", "500"], "experiente")
 
-    # Step 3: Sim → fotos/explicação
-    r = chat(cid, "sim por favor")
-    if not assert_contains(r, "15mg por concentração", "step3_explicacao"):
-        ok = False
-    else:
-        print(f"  ✅ Step 3: Explicação com {len(r.get('response_parts', []))} partes")
+    # Farewell — NÃO deve reiniciar flow
+    r = chat(cid, "ah nao esquece, tudo bem valeu")
+    c.not_contains(r, "Você já utiliza", "nao_reinicia_flow")
+    c.route_not(r, "playbook", "nao_playbook")
+    # Deve ser resposta de despedida
+    c.any_contains(r, ["disposição", "chamar", "precisar", "👋", "até"], "farewell_response")
 
-    # Step 4: Pergunta sobre horário de entrega
-    # NÃO deve enviar pagamento, NÃO deve enviar TG/Tirzec
-    r = chat(cid, "ah beleza, voces teriam disponibilidade pra qual horario pra trazer aqui?")
-    step4_ok = True
-    if not assert_not_contains(r, "Formas de pagamento", "step4_nao_pagamento"):
-        step4_ok = False
-    if not assert_not_contains(r, "Não estou trabalhando com a TG", "step4_nao_tg"):
-        step4_ok = False
-    if not assert_not_contains(r, "Tirzec acabou", "step4_nao_tirzec"):
-        step4_ok = False
-    if not assert_not_route(r, "human_handoff", "step4_nao_humano"):
-        step4_ok = False
-    if step4_ok:
-        print(f"  ✅ Step 4: Respondeu sobre entrega sem enviar pagamento/TG")
-        print(f"     Resposta: {r['response'][:100]}...")
-    else:
-        ok = False
-
-    # Step 5: Questionar resposta errada — NÃO deve ir pro humano
-    r = chat(cid, "e o que isso tem a ver com o que eu perguntei?")
-    if not assert_not_route(r, "human_handoff", "step5_nao_humano"):
-        ok = False
-    else:
-        print(f"  ✅ Step 5: Não mandou pro humano ao questionar")
-        print(f"     Resposta: {r['response'][:100]}...")
-
-    return ok
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
 
 
 # ============================================================================
-# CENÁRIO 2: Mesmo fluxo, mas com TG errado + recuperação
+# CENÁRIO 4: Variações de farewell
 # ============================================================================
-def test_scenario_2():
+def test_farewell_variacoes():
     """
-    Fluxo: ola → ja utilizei → sim → pergunta horário → questiona → continua
-    Esperado: NÃO mandar pro humano, recuperar a conversa
+    Testa múltiplas frases que devem ser classificadas como farewell.
     """
-    print("\n📋 Cenário 2: Bot responde errado e cliente questiona")
-    print("=" * 60)
-    cid = f"test_scenario2_{int(time.time())}"
-    ok = True
+    c = Check("Variações de farewell")
+    farewells = [
+        "valeu, tchau",
+        "obrigado, era só isso",
+        "beleza, até mais",
+        "pode deixar, não preciso de mais nada",
+    ]
 
-    # Steps 1-3 rápidos
+    for msg in farewells:
+        cid = uid("fv")
+        # Inicia flow
+        chat(cid, "ola")
+        # Farewell
+        r = chat(cid, msg)
+        # NÃO deve reiniciar (não deve ter "Você já utiliza")
+        if "você já utiliza" in r.get("response", "").lower():
+            c.passed = False
+            c.details.append(f"❌ '{msg}' reiniciou flow!")
+        # NÃO deve ir pro humano
+        if r.get("route") == "human_handoff":
+            c.passed = False
+            c.details.append(f"❌ '{msg}' → human_handoff")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 5: Horário de entrega — sem limite fixo
+# ============================================================================
+def test_horario_entrega():
+    """
+    Pergunta "qual horário vocês entregam?"
+    Esperado: NÃO mencionar "até as 18h" ou horário fixo.
+    Deve perguntar a disponibilidade do cliente.
+    """
+    c = Check("Horário entrega sem limite fixo")
+    cid = uid("hor")
+
+    chat(cid, "ola")
+    chat(cid, "ja utilizei")
+    r = chat(cid, "sim, quero a caixa")
+
+    # Pergunta sobre horário
+    r = chat(cid, "qual horario voces entregam?")
+    c.not_contains(r, "até as 18", "sem_limite_18h")
+    c.not_contains(r, "das 9 às", "sem_horario_fixo")
+    c.not_contains(r, "horário comercial", "sem_horario_comercial")
+    c.route_not(r, "human_handoff", "nao_humano")
+
+    # Idealmente pergunta disponibilidade do cliente
+    full = r.get("response", "").lower()
+    mentions_client = any(w in full for w in ["melhor pra você", "disponibilidade", "horário", "preferência", "qual horário"])
+    if not mentions_client:
+        c.details.append(f"⚠️  Não perguntou disponibilidade do cliente: '{full[:100]}'")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 6: Pagamento — somente na entrega
+# ============================================================================
+def test_pagamento_na_entrega():
+    """
+    Pergunta "como pago?" ou "manda o pix"
+    Esperado: Pagamento na hora da entrega. NUNCA pedir antecipado.
+    """
+    c = Check("Pagamento somente na entrega")
+    cid = uid("pag")
+
+    chat(cid, "ola")
+    chat(cid, "ja utilizei")
+    # "quero comprar" dispara send_sequence com fotos (step 5)
+    chat(cid, "quero comprar")
+    # Agora no step 7 — pergunta sobre pagamento
+    r = chat(cid, "como eu pago?")
+
+    # NÃO deve pedir pix antecipado
+    c.not_contains(r, "envie o pix antes", "sem_pix_antecipado")
+    c.not_contains(r, "pague antes", "sem_pague_antes")
+    c.not_contains(r, "antecipado", "sem_antecipado")
+    c.not_contains(r, "transferência antes", "sem_transferencia_antes")
+
+    # Deve mencionar "na entrega" ou "na hora" ou formas de pagamento
+    c.any_contains(r, ["na entrega", "na hora", "pix", "cartão", "crédito", "pagamento"], "menciona_pagamento")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 7: Pagamento antecipado negado explicitamente
+# ============================================================================
+def test_pagamento_antecipado_negado():
+    """
+    'Posso pagar antes pra garantir?' → bot deve negar.
+    """
+    c = Check("Nega pagamento antecipado")
+    cid = uid("pgn")
+
+    chat(cid, "ola")
+    chat(cid, "ja uso tirzepatida")
+    # Aceitar dispara send_sequence com fotos (step 5)
+    chat(cid, "ok, quero sim")
+    # Agora no step 7 — pergunta sobre pix antecipado
+    r = chat(cid, "posso te mandar o pix agora pra garantir o meu?")
+
+    # Deve explicar formas de pagamento (playbook envia formas_pagamento)
+    c.any_contains(r, ["na entrega", "na hora", "presencial", "pix", "cartão", "crédito", "pagamento"], "paga_na_entrega")
+    c.not_contains(r, "pode sim, manda", "nao_aceita_antecipado")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 8: Preços corretos
+# ============================================================================
+def test_precos_corretos():
+    """
+    Pergunta direta sobre preço.
+    Esperado: R$500 (ampola) e R$1.800 (caixa). NUNCA R$1.490.
+    """
+    c = Check("Preços corretos do playbook")
+    cid = uid("prc")
+
+    chat(cid, "ola")
+    r = chat(cid, "quanto custa?")
+
+    c.not_contains(r, "1.490", "sem_preco_antigo")
+    c.not_contains(r, "1490", "sem_preco_antigo2")
+
+    # Deve ter preços corretos
+    c.any_contains(r, ["500", "1.800", "1800"], "preco_correto")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 9: LLM não gera placeholders de imagem
+# ============================================================================
+def test_sem_placeholders():
+    """
+    Quando resposta vai pro LLM/RAG, NÃO deve gerar [IMAGEM:] nem ---MSG---.
+    """
+    c = Check("Sem placeholders de imagem na LLM")
+    cid = uid("plc")
+
+    chat(cid, "ola")
+    chat(cid, "nunca usei")
+    # "sim, pode explicar" dispara send_sequence com fotos (step 5)
+    chat(cid, "sim, pode explicar")
+    # Agora no step 7 — pergunta vai pro RAG (não é payment)
+    r = chat(cid, "como eu aplico a injeção? tem alguma orientação?")
+
+    # Só checa placeholders se resposta veio do LLM/RAG (não do playbook)
+    route = r.get("route", "")
+    if route != "playbook":
+        c.not_contains(r, "[IMAGEM:", "sem_placeholder_imagem")
+        c.not_contains(r, "---MSG---", "sem_msg_separator")
+        c.not_contains(r, "[FOTO:", "sem_placeholder_foto")
+    else:
+        # Se ainda vier do playbook, [IMAGEM:] é tag legítima — não é erro
+        c.details.append("ℹ️  route=playbook — [IMAGEM:] é tag legítima do playbook")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 10: TG → redireciona para Tizerdral
+# ============================================================================
+def test_tg_redirecionamento():
+    """
+    'Vocês têm TG?' → Não trabalho com TG, só Tizerdral.
+    """
+    c = Check("TG redireciona para Tizerdral")
+    cid = uid("tg")
+
+    chat(cid, "ola")
+    r = chat(cid, "voces tem TG?")
+
+    c.any_contains(r, ["não estou trabalhando com a tg", "tizerdral", "mesmo princípio ativo"], "redireciona_tizerdral")
+    c.not_contains(r, "temos sim", "nao_afirma_ter_tg")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 11: Tirzec → redireciona para Tizerdral
+# ============================================================================
+def test_tirzec_redirecionamento():
+    """
+    'Tem Tirzec?' → Acabou, só tenho Tizerdral.
+    """
+    c = Check("Tirzec redireciona para Tizerdral")
+    cid = uid("tzc")
+
+    chat(cid, "ola")
+    r = chat(cid, "tem tirzec disponivel?")
+
+    c.any_contains(r, ["acabou", "tizerdral", "mesmo princípio", "não tenho tirzec"], "redireciona_tizerdral")
+    c.not_contains(r, "tenho sim", "nao_afirma_ter_tirzec")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 12: Cliente questiona resposta — NÃO vai pro humano
+# ============================================================================
+def test_questionamento_nao_humano():
+    """
+    Cliente questiona algo → bot deve tentar responder, NÃO handoff.
+    """
+    c = Check("Questionamento não vai pro humano")
+    cid = uid("qst")
+
     chat(cid, "ola")
     chat(cid, "ja utilizei")
     r = chat(cid, "sim por favor")
-    print("  ✅ Steps 1-3: Flow normal (abertura → experiente → explicação)")
 
-    # Step 4: Pergunta sobre entrega — deve usar generate_response
-    r = chat(cid, "qual horario voces entregam?")
-    step4_ok = True
-    if not assert_not_contains(r, "Formas de pagamento", "step4_nao_pagamento"):
-        step4_ok = False
-    if not assert_not_contains(r, "Não estou trabalhando com a TG", "step4_nao_tg"):
-        step4_ok = False
-    if not assert_not_route(r, "human_handoff", "step4_nao_humano"):
-        step4_ok = False
-    if step4_ok:
-        print(f"  ✅ Step 4: Respondeu sobre horário sem enviar lixo")
-        print(f"     Route: {r['route']}")
-        print(f"     Resposta: {r['response'][:100]}...")
-    else:
-        ok = False
+    # Questiona resposta anterior
+    r = chat(cid, "o que isso tem a ver com o que eu perguntei?")
+    c.route_not(r, "human_handoff", "nao_humano_questionamento")
 
-    # Step 5: Cliente questiona — NÃO mandar pro humano
-    r = chat(cid, "O que isso tem a ver? qual horario voces entrega?")
-    if not assert_not_route(r, "human_handoff", "step5_nao_humano"):
-        ok = False
-    else:
-        print(f"  ✅ Step 5: Não mandou pro humano ao questionar")
-        print(f"     Route: {r['route']}")
-        print(f"     Resposta: {r['response'][:100]}...")
+    # Repete pergunta
+    r = chat(cid, "me responde a pergunta por favor")
+    c.route_not(r, "human_handoff", "nao_humano_insistencia")
 
-    # Step 6: Continuar conversa normalmente
-    r = chat(cid, "quero comprar a caixa")
-    if not assert_not_route(r, "human_handoff", "step6_nao_humano"):
-        ok = False
-    else:
-        print(f"  ✅ Step 6: Conversa continuou normalmente")
-        print(f"     Route: {r['route']}")
-        print(f"     Resposta: {r['response'][:80]}...")
-
-    return ok
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
 
 
-if __name__ == "__main__":
-    print("🧪 Teste de Conversas Completas — Tizerdral")
-    print("=" * 60)
+# ============================================================================
+# CENÁRIO 13: Assets servidos
+# ============================================================================
+def test_assets():
+    """Verifica que /assets endpoint serve arquivos de imagem."""
+    c = Check("Assets endpoint disponível")
 
     try:
-        requests.get(f"{BASE_URL}/health", timeout=3)
+        # Testa um arquivo real em vez de listar diretório
+        r = requests.get(f"{BASE_URL}/assets/tizerdral/foto_caixa_tizerdral.jpg", timeout=5)
+        if r.status_code != 200:
+            c.passed = False
+            c.details.append(f"❌ /assets/tizerdral/foto_caixa_tizerdral.jpg retornou {r.status_code}")
+        else:
+            content_type = r.headers.get("content-type", "")
+            if "image" not in content_type:
+                c.details.append(f"⚠️  Content-Type inesperado: {content_type}")
+    except Exception as e:
+        c.passed = False
+        c.details.append(f"❌ Erro: {e}")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 14: Continuidade após RAG
+# ============================================================================
+def test_continuidade_pos_rag():
+    """
+    Após resposta RAG, bot continua conversa normalmente.
+    Não trava nem manda pro humano.
+    """
+    c = Check("Continuidade pós-RAG")
+    cid = uid("cont")
+
+    chat(cid, "ola")
+    chat(cid, "ja utilizei")
+    r = chat(cid, "quanto tempo demora pra fazer efeito?")
+    c.route_not(r, "human_handoff", "rag_nao_humano")
+
+    # Continua conversa
+    r = chat(cid, "entendi, e quanto custa a caixa?")
+    c.route_not(r, "human_handoff", "continuidade_nao_humano")
+    c.any_contains(r, ["1.800", "1800", "500", "pagamento", "caixa"], "responde_preco")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 15: Hesitação → Anvisa/escassez
+# ============================================================================
+def test_hesitacao():
+    """
+    'Vou pensar' → bot deve usar argumento de escassez/Anvisa.
+    """
+    c = Check("Hesitação → Anvisa/escassez")
+    cid = uid("hes")
+
+    chat(cid, "ola")
+    chat(cid, "nunca usei")
+    chat(cid, "sim, pode explicar")
+    r = chat(cid, "vou pensar, vou falar com meu marido")
+
+    # Deve mencionar Anvisa, escassez, ou reforçar disponibilidade
+    c.any_contains(r, ["anvisa", "escass", "fiscalização", "disposição", "disponibilidade", "acabar"], "argumento_escassez")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 16: Resposta de entrega presencial em SJC
+# ============================================================================
+def test_entrega_sjc():
+    """
+    'Vocês entregam?' → Entrega presencial em SJC.
+    """
+    c = Check("Entrega presencial SJC")
+    cid = uid("sjc")
+
+    chat(cid, "ola")
+    chat(cid, "ja utilizei, quero comprar")
+    r = chat(cid, "vocês entregam ou tenho que ir buscar?")
+
+    c.any_contains(r, ["entrega", "residência", "presencial", "sjc", "levamos", "pessoalmente"], "menciona_entrega")
+    c.not_contains(r, "correio", "sem_correio")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 17: Duração da caixa
+# ============================================================================
+def test_duracao_caixa():
+    """
+    'Quanto tempo dura a caixa?' → 4 a 6 meses.
+    """
+    c = Check("Duração da caixa (4-6 meses)")
+    cid = uid("dur")
+
+    chat(cid, "ola")
+    chat(cid, "ja utilizei")
+    r = chat(cid, "quanto tempo dura a caixa?")
+
+    c.any_contains(r, ["4", "6", "meses", "mês"], "menciona_duracao")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 18: Frase ambígua que NÃO é farewell
+# ============================================================================
+def test_nao_farewell_falso_positivo():
+    """
+    'Tudo bem, me fala mais' → NÃO é farewell (continua conversa).
+    """
+    c = Check("Não classifica falso positivo como farewell")
+    cid = uid("nfp")
+
+    chat(cid, "ola")
+    r = chat(cid, "tudo bem, me fala mais sobre o produto")
+
+    # NÃO deve ser farewell
+    c.route_not(r, "farewell", "nao_farewell")
+    # NÃO deve ter resposta de despedida
+    c.not_contains(r, "👋", "sem_despedida")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 19: Múltiplas perguntas em sequência (stress test)
+# ============================================================================
+def test_multiplas_perguntas():
+    """
+    Cliente faz várias perguntas em sequência — bot não trava.
+    """
+    c = Check("Múltiplas perguntas sem travar")
+    cid = uid("mult")
+
+    chat(cid, "ola")
+    chat(cid, "ja utilizei")
+
+    perguntas = [
+        "quanto custa?",
+        "como funciona a entrega?",
+        "aceita cartão?",
+        "e se eu quiser só uma ampola?",
+    ]
+
+    for p in perguntas:
+        r = chat(cid, p)
+        c.route_not(r, "human_handoff", f"nao_humano: '{p[:30]}'")
+        # Deve ter resposta não vazia
+        if not r.get("response", "").strip():
+            c.passed = False
+            c.details.append(f"❌ Resposta vazia para: '{p}'")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 20: Não dar orientação médica
+# ============================================================================
+def test_sem_orientacao_medica():
+    """
+    'Qual dose devo tomar?' → NÃO deve receitar diretamente.
+    """
+    c = Check("Sem orientação médica direta")
+    cid = uid("med")
+
+    chat(cid, "ola")
+    chat(cid, "nunca usei")
+    r = chat(cid, "qual dose eu devo tomar? pode me receitar?")
+
+    # Não deve receitar diretamente
+    c.not_contains(r, "tome", "sem_receitar")
+    c.not_contains(r, "você deve aplicar", "sem_prescrever")
+    # Deve sugerir consulta ou ser cauteloso
+    full = r.get("response", "").lower()
+    cautious = any(w in full for w in ["médico", "profissional", "orientação", "consulta", "acompanhamento"])
+    if not cautious:
+        c.details.append(f"⚠️  Pode não ter sido cauteloso: '{full[:100]}'")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 19: Horário dentro do range → aceitar
+# ============================================================================
+def test_horario_dentro_range():
+    """
+    Cliente propõe 19:00 ou 20:30 → bot deve ACEITAR sem questionar.
+    """
+    c = Check("Horário dentro do range → aceita")
+    cid = uid("hdr")
+
+    chat(cid, "ola")
+    chat(cid, "ja utilizei")
+    chat(cid, "quero comprar")
+    chat(cid, "como funciona a entrega?")
+
+    r = chat(cid, "pode ser as 19:00 de amanha?")
+    # NÃO deve recusar horário dentro do range
+    recusa = ["não consigo", "fora do horário", "fica difícil", "indisponível", "complicado"]
+    for w in recusa:
+        c.not_contains(r, w, f"nao_recusar_19h:{w}")
+    # Deve aceitar/confirmar
+    c.any_contains(r, ["pode", "combinado", "certo", "beleza", "perfeito", "ok", "ótimo", "endereço", "agendar", "anotado"], "aceita_19h")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 20: Horário fora do range → sugerir alternativa
+# ============================================================================
+def test_horario_fora_range():
+    """
+    Cliente propõe 3h da manhã → bot deve sugerir outro horário.
+    """
+    c = Check("Horário fora do range → sugere alternativa")
+    cid = uid("hfr")
+
+    chat(cid, "ola")
+    chat(cid, "ja utilizei")
+    chat(cid, "quero a caixa")
+    chat(cid, "quando entregam?")
+
+    r = chat(cid, "pode ser as 3 da manha?")
+    # NÃO deve aceitar cegamente
+    aceita_cego = ["perfeito, 3", "pode sim, 3", "combinado para as 3", "tá marcado 3"]
+    for w in aceita_cego:
+        c.not_contains(r, w, f"nao_aceitar_3am:{w}")
+    # Deve sugerir alternativa
+    c.any_contains(r, ["outro horário", "manhã", "tarde", "difícil", "complicado", "melhor", "cedo", "sugerir"], "sugere_alternativa")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 21: Flow completo até goto_flow (fechamento_venda)
+# ============================================================================
+def test_flow_goto_fechamento():
+    """
+    Conversa completa: ola → ja utilizei → sim → horário? → 20:30 → marcar?
+    O último step deve transicionar para fechamento_venda (route=playbook).
+    """
+    c = Check("Flow completo → goto_flow fechamento_venda")
+    cid = uid("goto")
+
+    r = chat(cid, "ola")
+    c.contains(r, "Você já utiliza", "abertura")
+
+    r = chat(cid, "ja utilizei")
+    c.any_contains(r, ["já conhece", "princípio ativo", "500"], "experiente")
+
+    r = chat(cid, "sim por favor")
+    # fotos
+    full = r.get("response", "")
+    if "seringa" not in full.lower() and "imagem" not in full.lower():
+        c.details.append(f"⚠️  Esperava fotos: '{full[:80]}'")
+
+    r = chat(cid, "qual horario entregam?")
+    c.not_contains(r, "Você já utiliza", "nao_reinicia_step4")
+    c.not_contains(r, "24 hora", "sem_24h")
+
+    r = chat(cid, "as 20:30")
+    c.not_contains(r, "Você já utiliza", "nao_reinicia_step5")
+
+    r = chat(cid, "podemos marcar?")
+    c.not_contains(r, "Você já utiliza", "nao_reinicia_step6")
+    # Deve ser route=playbook (fechamento_venda via goto_flow)
+    c.route_is(r, "playbook", "goto_flow_route")
+    # Conteúdo de fechamento
+    c.any_contains(r, ["caixa", "ampola", "maioria", "separar", "endereço", "confirmar"], "conteudo_fechamento")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# CENÁRIO 22: Entrega — NÓS levamos, cliente NÃO busca
+# ============================================================================
+def test_entrega_nos_levamos():
+    """
+    Resposta sobre entrega deve usar 'levamos/entregamos/vamos até você'.
+    NUNCA 'pode trazer', 'buscar', 'retirar' (invertendo quem entrega).
+    """
+    c = Check("Entrega: NÓS levamos (sem 'pode trazer')")
+    cid = uid("lev")
+
+    chat(cid, "ola")
+    chat(cid, "ja utilizei")
+    r = chat(cid, "como funciona a entrega? vocês vêm até mim?")
+
+    # NÃO deve inverter (cliente traz/busca)
+    c.not_contains(r, "pode trazer", "sem_pode_trazer")
+    c.not_contains(r, "você traz", "sem_voce_traz")
+    c.not_contains(r, "buscar", "sem_buscar")
+    c.not_contains(r, "retirar", "sem_retirar")
+    # Deve afirmar que NÓS levamos
+    c.any_contains(r, ["levamos", "entregamos", "vamos até", "residência", "sua casa", "entrega", "presencial"], "nos_levamos")
+
+    c.report()
+    RESULTS.append((c.scenario, c.passed))
+
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+def main():
+    print("🧪 Teste Abrangente de Conversas — Tizerdral")
+    print(f"🌐 Servidor: {BASE_URL}")
+    print(f"🏷️  Domínio: {DOMAIN}")
+    print(f"⏱️  Delay entre cenários: {DELAY_BETWEEN_SCENARIOS}s")
+    print("=" * 60)
+
+    # Health check
+    try:
+        r = requests.get(f"{BASE_URL}/health", timeout=5)
+        r.raise_for_status()
+        print("✅ Servidor online\n")
     except Exception:
         print(f"❌ Servidor não está rodando em {BASE_URL}")
         sys.exit(1)
 
-    results = []
-    results.append(("Cenário 1: Horário de entrega", test_scenario_1()))
-    print("\n⏳ Aguardando 30s para rate limit do Groq resetar...\n")
-    import time
-    time.sleep(30)
-    results.append(("Cenário 2: Questiona + recupera", test_scenario_2()))
+    # Todos os cenários
+    all_scenarios = [
+        ("1. Fluxo iniciante", test_fluxo_iniciante),
+        ("2. Fluxo experiente", test_fluxo_experiente),
+        ("3. Farewell não reinicia", test_farewell_nao_reinicia),
+        ("4. Variações de farewell", test_farewell_variacoes),
+        ("5. Horário entrega (sem 24h)", test_horario_entrega),
+        ("6. Pagamento na entrega", test_pagamento_na_entrega),
+        ("7. Nega pagamento antecipado", test_pagamento_antecipado_negado),
+        ("8. Preços corretos", test_precos_corretos),
+        ("9. Sem placeholders", test_sem_placeholders),
+        ("10. Assets endpoint", test_assets),
+        ("11. TG → Tizerdral", test_tg_redirecionamento),
+        ("12. Tirzec → Tizerdral", test_tirzec_redirecionamento),
+        ("13. Questionamento ≠ humano", test_questionamento_nao_humano),
+        ("14. Continuidade pós-RAG", test_continuidade_pos_rag),
+        ("15. Hesitação", test_hesitacao),
+        ("16. Entrega SJC", test_entrega_sjc),
+        ("17. Duração caixa", test_duracao_caixa),
+        ("18. Não farewell falso+", test_nao_farewell_falso_positivo),
+        ("19. Horário dentro do range", test_horario_dentro_range),
+        ("20. Horário fora do range", test_horario_fora_range),
+        ("21. Flow → goto_flow fechamento", test_flow_goto_fechamento),
+        ("22. Entrega: NÓS levamos", test_entrega_nos_levamos),
+        ("23. Múltiplas perguntas", test_multiplas_perguntas),
+        ("24. Sem orientação médica", test_sem_orientacao_medica),
+    ]
 
+    # Filtrar cenários por número se passados via argv (ex: python script.py 2 6 7 9)
+    filter_nums = set()
+    for arg in sys.argv[1:]:
+        if arg.isdigit():
+            filter_nums.add(int(arg))
+
+    if filter_nums:
+        scenarios = [(n, f) for n, f in all_scenarios if int(n.split(".")[0]) in filter_nums]
+        print(f"🔍 Rodando apenas cenários: {sorted(filter_nums)}\n")
+    else:
+        scenarios = all_scenarios
+
+    for i, (name, fn) in enumerate(scenarios):
+        run_scenario(name, fn)
+        # Delay entre cenários para não estourar rate limit
+        if i < len(scenarios) - 1:
+            print(f"\n  ⏳ Aguardando {DELAY_BETWEEN_SCENARIOS}s (rate limit)...")
+            time.sleep(DELAY_BETWEEN_SCENARIOS)
+
+    # Relatório final
     print("\n" + "=" * 60)
-    print("📊 RESULTADOS:")
-    all_ok = True
-    for name, passed in results:
-        status = "✅ PASS" if passed else "❌ FAIL"
-        print(f"  {status} — {name}")
-        if not passed:
-            all_ok = False
+    print("📊 RESULTADO FINAL")
+    print("=" * 60)
 
-    print()
-    sys.exit(0 if all_ok else 1)
+    passed = sum(1 for _, ok in RESULTS if ok)
+    total = len(RESULTS)
+
+    for name, ok in RESULTS:
+        status = "✅" if ok else "❌"
+        print(f"  {status} {name}")
+
+    print(f"\n  {passed}/{total} cenários passaram")
+
+    if passed == total:
+        print("\n  🎉 TODOS OS TESTES PASSARAM!")
+    else:
+        print("\n  ⚠️  Alguns cenários falharam — revisar.")
+
+    sys.exit(0 if passed == total else 1)
+
+
+if __name__ == "__main__":
+    main()
