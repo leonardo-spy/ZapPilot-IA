@@ -626,8 +626,9 @@ def _keyword_precheck(condition: str, user_msg: str, memory_context: str = "") -
     hint = hints.get(condition)
     if not hint or not isinstance(hint, dict):
         return None
-    keywords = hint.get("keywords_true", [])
-    if not keywords:
+    keywords_true = hint.get("keywords_true", [])
+    keywords_false = hint.get("keywords_false", [])
+    if not keywords_true and not keywords_false:
         return None
     # For "client state" conditions, also check conversation history
     # For "asks_*" conditions, only check current message (avoid false positives from history)
@@ -635,10 +636,14 @@ def _keyword_precheck(condition: str, user_msg: str, memory_context: str = "") -
     combined = f" {user_msg.lower().strip()} "
     if check_history and memory_context:
         combined += f" {memory_context.lower()} "
-    for kw in keywords:
+    # Check negative keywords FIRST — explicit negation overrides positive matches
+    for kw in keywords_false:
+        if kw in combined:
+            return False
+    for kw in keywords_true:
         if kw in combined:
             return True
-    return None  # No positive match → let LLM decide
+    return None  # No match → let LLM decide
 
 
 def _evaluate_condition_branch(
@@ -1060,6 +1065,8 @@ def _try_direct_flow_response(state: AgentState) -> dict | None:
             break
 
     if not response_parts:
+        state["active_flow"] = active_flow
+        state["flow_step"] = flow_step
         return None
 
     # Join with separator for individual messages

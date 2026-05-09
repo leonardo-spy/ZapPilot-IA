@@ -55,6 +55,11 @@ class GroqProvider(LLMProvider):
         error_str = str(error)
         return "429" in error_str or "rate_limit" in error_str.lower() or "quota" in error_str.lower()
 
+    def _is_org_restricted(self, error: Exception) -> bool:
+        """Detect Groq 'Organization has been restricted' errors (400)."""
+        error_str = str(error).lower()
+        return "restricted" in error_str or "organization" in error_str and "restrict" in error_str
+
     def _is_daily_quota(self, error: Exception) -> bool:
         error_str = str(error).lower()
         return "day" in error_str or "daily" in error_str
@@ -126,6 +131,13 @@ class GroqProvider(LLMProvider):
 
             except Exception as e:
                 last_error = e
+
+                # Organization restricted (400) → rotate key immediately
+                if self._is_org_restricted(e):
+                    logger.warning(f"[key-rotation] Groq: organização restrita na key {self._current_key_idx + 1}.")
+                    if self._switch_to_next_key():
+                        continue
+                    raise  # All keys restricted
 
                 if not self._is_rate_limit_error(e):
                     raise
@@ -391,15 +403,15 @@ def get_default_provider() -> LLMProvider:
 
     providers = []
 
-    # NVIDIA Build como primário (se tiver key)
-    nvidia_keys = os.getenv("NVIDIA_API_KEY", "")
-    if nvidia_keys.strip():
-        providers.append(NvidiaProvider(api_key=nvidia_keys))
-
-    # Groq como secundário (se tiver key)
+    # Groq como primário (rápido, se tiver key)
     groq_keys = os.getenv("GROQ_API_KEY", "")
     if groq_keys.strip():
         providers.append(GroqProvider(api_key=groq_keys))
+
+    # NVIDIA Build como fallback (se tiver key)
+    nvidia_keys = os.getenv("NVIDIA_API_KEY", "")
+    if nvidia_keys.strip():
+        providers.append(NvidiaProvider(api_key=nvidia_keys))
 
     # Local llama como último fallback
     local_url = os.getenv("LOCAL_LLM_URL")

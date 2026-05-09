@@ -236,57 +236,58 @@ flows:
 
       - action: wait_response
 
-      # Reagir à resposta do cliente — verificar pagamento/TG/Tirzec ANTES de enviar fotos
-      # IMPORTANTE: goto_flow sem wait_response no branch then para transicionar imediatamente
+      # Reagir à resposta do cliente
+      # Primeiro: verificar se o cliente simplesmente concordou/quer explicação → enviar fotos
+      # Segundo: verificar pagamento/TG/Tirzec/hesitação
       - action: condition
-        if: "asks_payment_method"
+        if: "client_agrees_or_confirms"
         then:
-          - action: send
-            message: formas_pagamento
-          - action: goto_flow
-            flow: fechamento_venda
+          - action: send_sequence
+            messages:
+              - foto_seringa
+              - foto_frasco
+              - explicacao_entrega
+              - explicacao_concentracao
+              - explicacao_duracao
+            delay_between: "2s"
         else:
           - action: condition
-            if: "asks_about_tg"
+            if: "asks_payment_method"
             then:
               - action: send
-                message: nao_tenho_tg
-              - action: send
-                message: ja_usei_todas
+                message: formas_pagamento
+              - action: goto_flow
+                flow: fechamento_venda
             else:
               - action: condition
-                if: "asks_about_tirzec"
+                if: "asks_about_tg"
                 then:
                   - action: send
-                    message: nao_tenho_tirzec
+                    message: nao_tenho_tg
                   - action: send
                     message: ja_usei_todas
                 else:
                   - action: condition
-                    if: "client_hesitates"
+                    if: "asks_about_tirzec"
                     then:
                       - action: send
-                        message: anvisa_escassez
+                        message: nao_tenho_tirzec
+                      - action: send
+                        message: ja_usei_todas
                     else:
-                      - action: generate_response
-                        context: "responder dúvida do cliente sobre Tizerdral usando RAG"
-
-      - action: wait_response
-
-      # Sequência de explicação (fotos + textos) — só envia se cliente não perguntou sobre pagamento
-      - action: send_sequence
-        messages:
-          - foto_seringa
-          - foto_frasco
-          - explicacao_entrega
-          - explicacao_concentracao
-          - explicacao_duracao
-        delay_between: "2s"
+                      - action: condition
+                        if: "client_hesitates"
+                        then:
+                          - action: send
+                            message: anvisa_escassez
+                        else:
+                          - action: generate_response
+                            context: "responder dúvida do cliente sobre Tizerdral usando RAG"
 
       - action: wait_response
 
       - action: goto_flow
-        flow: fechamento_venda
+        flow: loop_duvidas
 
   venda_cliente_retorno:
     description: "Cliente que já conversou — ser mais direto"
@@ -331,19 +332,65 @@ flows:
 
       - action: wait_response
 
+      # Verificar concordância, pagamento, ou dúvida
       - action: condition
-        if: "asks_payment_method"
+        if: "client_agrees_or_confirms"
         then:
-          - action: send
-            message: formas_pagamento
+          - action: send_sequence
+            messages:
+              - foto_seringa
+              - foto_frasco
+              - explicacao_entrega
+              - explicacao_concentracao
+              - explicacao_duracao
+            delay_between: "2s"
         else:
-          - action: generate_response
-            context: "atender dúvida do cliente retorno sobre Tizerdral"
+          - action: condition
+            if: "asks_payment_method"
+            then:
+              - action: send
+                message: formas_pagamento
+            else:
+              - action: generate_response
+                context: "atender dúvida do cliente retorno sobre Tizerdral"
 
       - action: wait_response
 
       - action: goto_flow
-        flow: fechamento_venda
+        flow: loop_duvidas
+
+  loop_duvidas:
+    description: "Loop para lidar com múltiplas dúvidas antes da venda"
+    steps:
+      - action: condition
+        if: "client_agrees_or_confirms"
+        then:
+          - action: send_sequence
+            messages:
+              - foto_seringa
+              - foto_frasco
+              - explicacao_entrega
+              - explicacao_concentracao
+              - explicacao_duracao
+            delay_between: "2s"
+          - action: goto_flow
+            flow: fechamento_venda
+        else:
+          - action: condition
+            if: "asks_payment_method"
+            then:
+              - action: send
+                message: formas_pagamento
+              - action: goto_flow
+                flow: fechamento_venda
+            else:
+              - action: generate_response
+                context: "atender dúvida do cliente sobre Tizerdral"
+
+      - action: wait_response
+
+      - action: goto_flow
+        flow: loop_duvidas
 
   fechamento_venda:
     description: "Empurrar fechamento — caixa vs ampola"
@@ -357,6 +404,12 @@ flows:
 
       - action: wait_response
 
+      - action: goto_flow
+        flow: loop_fechamento_duvidas
+
+  loop_fechamento_duvidas:
+    description: "Loop para lidar com hesitação e dúvidas no fechamento"
+    steps:
       - action: condition
         if: "client_accepts_or_chooses"
         then:
@@ -371,6 +424,11 @@ flows:
             else:
               - action: generate_response
                 context: "fechar venda de Tizerdral, tirar dúvida final"
+
+      - action: wait_response
+
+      - action: goto_flow
+        flow: loop_fechamento_duvidas
 
   # ---- FLOW: Cliente menciona TG ----
   pergunta_tg:
@@ -504,9 +562,48 @@ flows:
 # ============================================================================
 
 condition_hints:
+  client_agrees_or_confirms:
+    description: "sim APENAS se o cliente concorda, aceita a proposta, quer explicação, ou demonstra interesse positivo. Ex: 'sim', 'sim por favor', 'quero', 'pode explicar', 'claro', 'bora'. NÃO para perguntas, dúvidas ou respostas sobre outros assuntos."
+    keywords_true:
+      - "sim por favor"
+      - "sim, por favor"
+      - "sim pode"
+      - "sim quero"
+      - "sim, quero"
+      - "pode explicar"
+      - "pode sim"
+      - "quero sim"
+      - "quero saber"
+      - "me explica"
+      - "claro"
+      - "com certeza"
+      - "bora"
+      - "vamos"
+      - "show"
+      - "ok quero"
+      - "ok, quero"
+      - "ok sim"
+      - "quero comprar"
+      - "ok, sim"
+
   client_already_uses_similar_product:
-    description: "sim se diz que já usou, já usa, já utilizou, ou menciona qualquer produto similar. 'Já utilizei' ou 'já usei' = sim. Contexto: estamos vendendo tirzepatida"
+    description: "sim se diz que já usou, já usa, já utilizou, ou menciona qualquer produto similar. 'Já utilizei' ou 'já usei' = sim. NÃO se a pessoa diz que NÃO utiliza, nunca usou, é primeira vez. Contexto: estamos vendendo tirzepatida"
     check_history: true
+    keywords_false:
+      - "nao utilizo"
+      - "não utilizo"
+      - "nunca usei"
+      - "nunca utilizei"
+      - "primeira vez"
+      - "nao uso"
+      - "não uso"
+      - "nunca tomei"
+      - "nunca apliquei"
+      - "nunca fiz uso"
+      - "nao usei"
+      - "não usei"
+      - "iniciante"
+      - "sou iniciante"
     keywords_true:
       - "ja utilizei"
       - "já utilizei"
@@ -551,6 +648,7 @@ condition_hints:
       - "quanto fica"
       - "como paga"
       - "como pago"
+      - "como eu pago"
       - "pagar antes"
       - "pagar antecipado"
       - "mandar o pix"
@@ -595,6 +693,7 @@ condition_hints:
       - "pode mandar"
       - "quero a caixa"
       - "quero a ampola"
+      - "quero comprar"
       - "vou levar"
 
   negative_examples: "Perguntas sobre horário, entrega, disponibilidade NÃO são sobre pagamento."
